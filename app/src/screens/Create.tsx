@@ -19,7 +19,22 @@ import { useProfile } from '../lib/hooks.ts';
 import { publish, query } from '../lib/net.ts';
 import { save } from '../lib/storage.ts';
 import { useEditProfile } from './Profile.tsx';
+import { StartWallet } from './Wallet.tsx';
+import { getPaidHere, useWallet } from '../lib/wallet.ts';
 import { showPath, useMyShows } from './Podcast.tsx';
+
+/** The built-in wallet as the payout address, turning it on first if needed. */
+function BuiltInPayout({ onSaved }: { onSaved: (address: string) => void }) {
+  const { account } = useApp();
+  const wallet = useWallet(account);
+  if (!wallet.state) return <div className="skeleton" />;
+  if (!wallet.state.active) return <StartWallet onStarted={() => (getPaidHere(account), onSaved(wallet.address))} />;
+  return (
+    <button type="button" className="btn primary block" onClick={() => (getPaidHere(account), onSaved(wallet.address))}>
+      Use my Fairground wallet ({usd(wallet.state.usdc)})
+    </button>
+  );
+}
 
 /** Where payments arrive: the person's own Algorand wallet, checked for typos and for USDC being switched on. */
 export function PayoutSheet({ onClose, onSaved }: { onClose: () => void; onSaved?: (address: string) => void }) {
@@ -38,6 +53,8 @@ export function PayoutSheet({ onClose, onSaved }: { onClose: () => void; onSaved
   return (
     <Sheet title="Where should payments go?" onClose={onClose}>
       <p className="muted">Sponsors and fans pay your own wallet directly, in USDC (digital dollars). Fairground never holds your money.</p>
+      <BuiltInPayout onSaved={(a) => (onSaved?.(a), onClose())} />
+      <p className="small"><strong>Or use another wallet</strong> (Pera, a hardware wallet or a quantum-safe Falcon account):</p>
       <ol className="small" style={{ paddingLeft: 20, margin: 0 }}>
         <li>Install <a href="https://perawallet.app" target="_blank" rel="noopener noreferrer">Pera Wallet</a> and create an account. Choose a quantum-safe (Falcon) account if offered.</li>
         <li>In Pera, add the asset “USDC” so your account can receive it.</li>

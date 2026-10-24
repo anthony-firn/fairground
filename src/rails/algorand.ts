@@ -98,12 +98,12 @@ export function createAlgorandUsdcRail(indexer = DEFAULT_INDEXER, fetchImpl: typ
         'address-role': role,
         'asset-id': String(USDC_ASSET_ID),
         'tx-type': 'axfer',
-        'note-prefix': base64.encode(new TextEncoder().encode(notePrefix)),
         'after-time': isoTime(from - 1),
         'before-time': isoTime(to),
         limit: '1000',
       });
       const transfers: Transfer[] = [];
+      if (notePrefix) query.set('note-prefix', base64.encode(new TextEncoder().encode(notePrefix)));
       for (let page = 0; page < 100; page++) {
         const body = (await get(`/v2/transactions?${query}`, `transfers of ${address}`)) as { transactions?: unknown[]; 'next-token'?: string };
         for (const transaction of body.transactions ?? []) {

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { preview } from 'vite';
 import { KIND } from '../src/kinds.ts';
-import { MEDIA, startFixtureRelay } from './fixtures.ts';
+import { inertMoney, MEDIA, startFixtureRelay } from './fixtures.ts';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const shots = process.argv[2];
@@ -33,6 +33,7 @@ async function serveMedia(ctx: BrowserContext) {
 
 async function person(viewport: { width: number; height: number }): Promise<{ page: Page; pubkey: string }> {
   const ctx = await browser.newContext({ viewport, locale: 'en-US' });
+  await inertMoney(ctx);
   await serveMedia(ctx);
   await ctx.addInitScript(() => {
     localStorage.setItem('fairground.model', JSON.stringify({ kind: 'off' }));

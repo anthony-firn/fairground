@@ -12,6 +12,9 @@ import { encodeAddress, RAIL } from '../src/rails/algorand.ts';
 import { createOffer } from '../src/sponsorship.ts';
 import { createSupportPage } from '../src/support.ts';
 import { startDevRelay, type DevRelay } from '../tools/dev-relay.ts';
+import type { BrowserContext } from 'playwright';
+import { DEFAULT_GATEWAY } from '../src/defaults.ts';
+import { DEFAULT_ALGOD } from '../src/walletkey.ts';
 
 const TOPICS = [['cooking', 'food'], ['gaming', 'games'], ['running', 'outdoors'], ['tech', 'technology'], ['art', 'art'], ['music', 'music']];
 const now = () => Math.floor(Date.now() / 1000);
@@ -97,4 +100,14 @@ export async function startFixtureRelay(port: number): Promise<DevRelay & { crea
   store(finalizeEvent({ kind: 1, created_at: t - 30, content: 'Test outsider post #cooking', tags: [['t', 'cooking']] }, outsider));
 
   return { ...relay, creators, advertiser: getPublicKey(brandKey), shop };
+}
+
+/**
+ * Keeps a test off the real Algorand node and gateway: every wallet reads as new (not turned on), and the gateway
+ * offers no starter or buying. Tests that exercise the wallet route these hosts to stand-ins instead.
+ */
+export async function inertMoney(ctx: BrowserContext): Promise<void> {
+  const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' };
+  await ctx.route(`${DEFAULT_ALGOD}/**`, (r) => r.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify({ amount: 0, 'min-balance': 100000, assets: [] }) }));
+  await ctx.route(`${DEFAULT_GATEWAY}/**`, (r) => r.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify({ starter: null, ramp: false }) }));
 }

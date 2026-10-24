@@ -14,7 +14,10 @@ import { breaksFor, parsePlacement, type AdBreak, type Placement } from './ads.t
 import { KIND } from './kinds.ts';
 import { canJoin } from './mp3.ts';
 import { currentEpisodes, parseShow, renderRss, showAddress, type Episode, type Show } from './podcast.ts';
+import { verifyAuthHeader } from './httpauth.ts';
 import { membersFrom } from './network.ts';
+import { createRamp, sellOrderProblem, type RampOptions } from './ramp.ts';
+import { createStarter, type StarterOptions } from './starter.ts';
 import { keyLookup } from './pq.ts';
 import { assess } from './safety.ts';
 
@@ -33,6 +36,15 @@ export interface GatewayOptions {
   feedHeaders?: Record<string, string>;
   /** Accounts this gateway won't serve, e.g. after a takedown notice. */
   blocked?: string[];
+  /** Starts new built-in wallets (starter.ts). Off unless a sponsor key is configured. */
+  starter?: StarterOptions;
+  /** Buying and selling USDC through Transak (ramp.ts). Off unless partner credentials are configured. */
+  ramp?: RampOptions;
+}
+
+/** What the platform knows about a request that the Request itself doesn't carry. */
+export interface RequestInfo {
+  ip?: string;
 }
 
 /** Queries relays over WebSocket and returns the validly signed events, until each relay finishes or time runs out. */
@@ -204,7 +216,7 @@ async function etagOf(segments: Segment[]): Promise<string> {
 
 const extensionOf = (type: string) => (/mpeg|mp3/.test(type) ? 'mp3' : /mp4|m4a|aac/.test(type) ? 'm4a' : 'audio');
 
-export function createGateway(opts: GatewayOptions): (req: Request) => Promise<Response> {
+export function createGateway(opts: GatewayOptions): (req: Request, info?: RequestInfo) => Promise<Response> {
   const base = opts.base.replace(/\/+$/, '');
   const fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const WS = opts.WebSocket ?? WebSocket;
@@ -251,12 +263,71 @@ export function createGateway(opts: GatewayOptions): (req: Request) => Promise<R
   }
 
   const notFound = (what: string) => new Response(`${what} not found\n`, { status: 404, headers: { ...cors, 'Content-Type': 'text/plain' } });
+  const starter = opts.starter && createStarter({ fetch: fetchImpl, ...opts.starter });
+  const ramp = opts.ramp && createRamp({ fetch: fetchImpl, ...opts.ramp });
+  const reply = (body: unknown, status = 200) => Response.json(body, { status, headers: { ...cors, 'Cache-Control': 'no-store' } });
 
-  return async function handle(req: Request): Promise<Response> {
-    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...cors, 'Access-Control-Allow-Headers': 'Range', 'Access-Control-Allow-Methods': 'GET, HEAD' } });
-    if (req.method !== 'GET' && req.method !== 'HEAD') return new Response('method not allowed\n', { status: 405, headers: cors });
+  /** The Fairground member who signed this request, or an error response. */
+  async function member(req: Request, body = ''): Promise<string | Response> {
+    const auth = verifyAuthHeader(req.headers.get('Authorization'), req.url, req.method, body);
+    if ('error' in auth) return reply({ error: auth.error }, 401);
+    if (!membersFrom(await q({ kinds: [KIND.pqBinding], authors: [auth.pubkey] })).has(auth.pubkey)) return reply({ error: 'not a Fairground account' }, 403);
+    if (opts.blocked?.includes(auth.pubkey)) return reply({ error: 'this account can’t use this gateway' }, 403);
+    return auth.pubkey;
+  }
+
+  /** The built-in wallet's services: starting a wallet, and buying and selling USDC. */
+  async function money(req: Request, path: string, info: RequestInfo): Promise<Response | undefined> {
+    if (path === '/wallet/config' && req.method === 'GET') return reply({ starter: starter?.sponsor ?? null, ramp: !!ramp });
+    if (path === '/wallet/start' && req.method === 'POST') {
+      if (!starter) return reply({ error: 'this gateway doesn’t start wallets' }, 503);
+      const body = await req.text();
+      const who = await member(req, body);
+      if (who instanceof Response) return who;
+      const { optIn } = JSON.parse(body || '{}') as { optIn?: string };
+      const result = await starter.start(who, optIn ?? '').catch((e: Error) => ({ status: 502, error: e.message }));
+      return 'txid' in result ? reply(result) : reply({ error: result.error }, result.status);
+    }
+    if (path === '/ramp/session' && req.method === 'POST') {
+      if (!ramp) return reply({ error: 'buying and selling aren’t set up on this gateway yet' }, 503);
+      const body = await req.text();
+      const who = await member(req, body);
+      if (who instanceof Response) return who;
+      const p = JSON.parse(body || '{}') as { side?: string; walletAddress?: string; amount?: number; redirectURL?: string };
+      if ((p.side !== 'BUY' && p.side !== 'SELL') || !/^[A-Z2-7]{58}$/.test(p.walletAddress ?? '') || !/^(https:\/\/|http:\/\/localhost[:/])/.test(p.redirectURL ?? '')) return reply({ error: 'bad request' }, 400);
+      const amount = Number(p.amount) > 0 ? Number(p.amount) : undefined;
+      try {
+        const url = await ramp.session({
+          side: p.side, walletAddress: p.walletAddress!, customer: who, redirectURL: p.redirectURL!, userIp: info.ip ?? '0.0.0.0',
+          ...(p.side === 'BUY' ? { fiatAmount: amount } : { cryptoAmount: amount }),
+        });
+        return reply({ url });
+      } catch (e) {
+        return reply({ error: (e as Error).message }, 502);
+      }
+    }
+    const order = /^\/ramp\/order\/([A-Za-z0-9-]{6,80})$/.exec(path);
+    if (order && req.method === 'GET') {
+      if (!ramp) return reply({ error: 'buying and selling aren’t set up on this gateway yet' }, 503);
+      const who = await member(req);
+      if (who instanceof Response) return who;
+      try {
+        const o = await ramp.order(order[1]);
+        if (o.customer && o.customer !== who) return reply({ error: 'that order belongs to someone else' }, 403);
+        return reply({ order: o, problem: o.side === 'SELL' ? sellOrderProblem(o, who) ?? null : null });
+      } catch (e) {
+        return reply({ error: (e as Error).message }, 502);
+      }
+    }
+    return undefined;
+  }
+
+  return async function handle(req: Request, info: RequestInfo = {}): Promise<Response> {
+    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...cors, 'Access-Control-Allow-Headers': 'Range, Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, HEAD, POST' } });
     const url = new URL(req.url);
     const path = url.pathname.startsWith(base) ? url.pathname.slice(base.length) : url.pathname;
+    if (path.startsWith('/wallet/') || path.startsWith('/ramp/')) return (await money(req, path, info)) ?? notFound('page');
+    if (req.method !== 'GET' && req.method !== 'HEAD') return new Response('method not allowed\n', { status: 405, headers: cors });
     if (path === '/health') {
       const relays = await Promise.all(opts.relays.map(async (relay) => {
         const started = Date.now();

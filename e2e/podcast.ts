@@ -20,7 +20,7 @@ import { KIND } from '../src/kinds.ts';
 import { mp3Layout } from '../src/mp3.ts';
 import { DEVELOPMENT_ADDRESS } from '../src/defaults.ts';
 import { encodeAddress } from '../src/rails/algorand.ts';
-import { MEDIA, startFixtureRelay } from './fixtures.ts';
+import { inertMoney, MEDIA, startFixtureRelay } from './fixtures.ts';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const shots = process.argv[2];
@@ -61,6 +61,7 @@ async function standIns(ctx: BrowserContext) {
 
 async function person(viewport = { width: 1440, height: 900 }): Promise<{ page: Page; pubkey: string }> {
   const ctx = await browser.newContext({ viewport, locale: 'en-US' });
+  await inertMoney(ctx);
   await standIns(ctx);
   await ctx.addInitScript((payTo) => {
     localStorage.setItem('fairground.model', JSON.stringify({ kind: 'off' }));
@@ -221,7 +222,7 @@ try {
   await go(listener.page, '/you');
   await listener.page.getByRole('button', { name: 'Support Fairground' }).click();
   await listener.page.getByRole('button', { name: /Donate \$5\.00/ }).click();
-  const link = await listener.page.getByRole('link', { name: 'Open my wallet' }).getAttribute('href');
+  const link = await listener.page.getByRole('link', { name: 'Open another wallet app' }).getAttribute('href');
   assert.ok(link?.startsWith(`algorand://${DEVELOPMENT_ADDRESS}?amount=5000000&asset=31566704`), link ?? '');
   assert.ok(link?.includes('xnote=fairground%3Adevelopment'));
   await shot(listener.page, 'donate');

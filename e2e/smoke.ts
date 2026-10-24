@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type Page } from 'playwright';
 import { preview } from 'vite';
 import { KIND } from '../src/kinds.ts';
-import { startFixtureRelay } from './fixtures.ts';
+import { inertMoney, startFixtureRelay } from './fixtures.ts';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const relay = await startFixtureRelay(7791);
@@ -24,6 +24,7 @@ const step = (name: string) => console.log(`- ${name}`);
 
 try {
   const a = await browser.newContext({ viewport: { width: 420, height: 900 } });
+  await inertMoney(a);
   const page = await a.newPage();
   watch(page);
   await page.goto(url);
@@ -96,6 +97,7 @@ try {
 
   step('signing in on a second device restores the same account');
   const b = await browser.newContext({ viewport: { width: 420, height: 900 } });
+  await inertMoney(b);
   const other = await b.newPage();
   watch(other);
   await other.goto(url);

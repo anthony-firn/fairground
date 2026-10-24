@@ -15,6 +15,7 @@ const SECTIONS = [
   { path: '/search', label: 'Search', icon: 'search' },
   { path: '/messages', label: 'Messages', icon: 'comment' },
   { path: '/orders', label: 'Orders', icon: 'receipt' },
+  { path: '/wallet', label: 'Wallet', icon: 'wallet' },
   { path: '/create', label: 'Create', icon: 'spark' },
   { path: '/you', label: 'You', icon: 'user' },
 ];

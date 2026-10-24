@@ -282,3 +282,10 @@ progress { width: 100%; accent-color: var(--accent); }
 @media (min-width: 1000px) {
   .show-shelf { grid-auto-flow: row; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); grid-auto-columns: unset; }
 }
+
+/* Wallet */
+.wallet-balance { padding: 24px 16px; gap: 4px; }
+.wallet-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.activity { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.activity:last-child { border-bottom: 0; }
+@media (min-width: 700px) { .wallet-actions { grid-template-columns: repeat(4, 1fr); } }

@@ -18,6 +18,7 @@ import { ListenScreen, MediaDetail, PhotosScreen, ShortsScreen, VideosScreen } f
 import { Search } from './screens/Search.tsx';
 import { EpisodeEditor, ShowEditor, ShowPage } from './screens/Podcast.tsx';
 import { CampaignBuilder, CampaignPage } from './screens/Campaigns.tsx';
+import { WalletScreen } from './screens/Wallet.tsx';
 import { Create, MediaKitScreen, SupportPageScreen } from './screens/Create.tsx';
 import { Home } from './screens/Home.tsx';
 import { Profile } from './screens/Profile.tsx';
@@ -29,6 +30,15 @@ import { About, AccountScreen, FeedSettings, RelaysScreen, SupportingScreen, You
 
 const { account, isNew } = loadOrCreateAccount();
 onChange(scheduleSync);
+
+// Coming back from Transak (buying or cashing out) lands on the wallet; the order details ride in the query string.
+{
+  const back = new URLSearchParams(location.search);
+  if (back.get('ramp')) {
+    const orderId = back.get('orderId');
+    history.replaceState(null, '', `${location.pathname}#/wallet${back.get('ramp') === 'sell' && orderId ? `?orderId=${encodeURIComponent(orderId)}` : ''}`);
+  }
+}
 
 function currentRoute() {
   const hash = location.hash.replace(/^#/, '') || '/';
@@ -115,6 +125,7 @@ export function App() {
   else if (path === '/create/support') screen = <SupportPageScreen />;
   else if (path === '/create/survey') screen = <SurveyScreen />;
   else if (path === '/promote') screen = <Promote query={query} />;
+  else if (path === '/wallet') screen = <WalletScreen key={query.toString()} query={query} />;
   else if (path === '/promote/campaign/new') screen = <CampaignBuilder />;
   else if (/^\/promote\/campaign\/[a-z0-9-]+$/.test(path)) screen = <CampaignPage key={path} slug={path.split('/')[3]} />;
   else if (path === '/podcast/new') screen = <ShowEditor />;
@@ -133,7 +144,7 @@ export function App() {
 
   const wide = ['/videos', '/market', '/photos', '/search'].includes(path) || ['/media/', '/l/', '/s/'].some((p) => path.startsWith(p));
   const tab = ['/photos', '/videos', '/shorts', '/listen'].includes(path) || path.startsWith('/media/') || path.startsWith('/show/') ? '/' : TABS.slice().reverse().find((t) => (t.path === '/' ? path === '/' : path.startsWith(t.path)))?.path
-    ?? (['/feed', '/account', '/relays', '/supporting', '/about', '/orders', '/messages'].includes(path) || path.startsWith('/messages/') ? '/you'
+    ?? (['/feed', '/account', '/relays', '/supporting', '/about', '/orders', '/messages', '/wallet'].includes(path) || path.startsWith('/messages/') ? '/you'
       : path.startsWith('/promote') || path.startsWith('/podcast') || path === '/relay' ? '/create'
         : path.startsWith('/l/') || path.startsWith('/s/') ? '/market' : '');
 

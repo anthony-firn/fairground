@@ -454,6 +454,38 @@ MPEG version, sample rate or channels differ from the episode's are skipped. Dow
 to the file.
 
 
+## Built-in wallet
+
+An account's wallet is the Algorand Ed25519 account whose seed is `HKDF-SHA256(ikm = Nostr secret key, salt =
+"fairground", info = "algorand-wallet/v1", 32 bytes)`. Payments from it are ordinary USDC transfers with the same memos
+as payment links.
+
+### Starting a wallet
+
+A gateway may sponsor new wallets. The wallet builds and signs, and the sponsor rebuilds and checks, one atomic group:
+
+1. a payment of 250,000 micro-ALGO from the sponsor to the wallet, fee twice the minimum, note
+   `fairground:starter:<member pubkey>`;
+2. the wallet's USDC opt-in (a zero-amount USDC transfer to itself), fee 0.
+
+Both use the opt-in's validity window and genesis. The sponsor refuses an opt-in that differs in any field from the one
+it would build, a wallet that already holds USDC or 0.2 ALGO, a member who already has a starter payment (found by note
+prefix), and anything past its daily cap (counted the same way).
+
+### Gateway requests
+
+Wallet and ramp calls carry a NIP-98 `Authorization: Nostr <base64 event>` header: kind 27235, `u` the exact URL,
+`method`, and `payload` (SHA-256 of the body) when there is one, created within 60 seconds. Only members (accounts
+with a key binding) are served.
+
+- `GET /wallet/config` → `{ starter: <sponsor address> | null, ramp: boolean }`
+- `POST /wallet/start` `{ optIn: <base64 signed opt-in> }` → `{ txid }`
+- `POST /ramp/session` `{ side: "BUY" | "SELL", walletAddress, amount?, redirectURL }` → `{ url }`, a single-use
+  Transak widget link; the member's pubkey is the order's `partnerCustomerId`.
+- `GET /ramp/order/<id>` → `{ order, problem }`. A wallet pays into a sale only when `problem` is null: the order is
+  the member's own, a sale of USDC on Algorand, and waiting for the USDC. The payment's memo is
+  `fairground:cashout:<order id>`.
+
 ## Listings (NIP-99, kind 30402)
 
 Standard NIP-99 tags, plus:

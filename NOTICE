@@ -7,4 +7,5 @@ Third-party software in the app:
   Lesser General Public License 3.0. It is loaded as its own unmodified file, only when a recording is converted to
   MP3. LAME: https://lame.sourceforge.io
 - hls.js (https://github.com/video-dev/hls.js), Apache License 2.0.
+- algosdk (https://github.com/algorand/js-algorand-sdk), MIT License, loaded only when the wallet signs.
 - Other dependencies and their licences are listed in package.json and app/package.json.

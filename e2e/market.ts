@@ -11,7 +11,7 @@ import { chromium, type Page } from 'playwright';
 import { preview } from 'vite';
 import { KIND } from '../src/kinds.ts';
 import { encodeAddress } from '../src/rails/algorand.ts';
-import { startFixtureRelay } from './fixtures.ts';
+import { inertMoney, startFixtureRelay } from './fixtures.ts';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const relay = await startFixtureRelay(7792);
@@ -23,6 +23,7 @@ const step = (name: string) => console.log(`- ${name}`);
 
 async function person(payTo: boolean): Promise<{ page: Page; pubkey: string }> {
   const ctx = await browser.newContext({ viewport: { width: 420, height: 900 } });
+  await inertMoney(ctx);
   await ctx.addInitScript(([pay]) => {
     localStorage.setItem('fairground.model', JSON.stringify({ kind: 'off' }));
     if (pay) localStorage.setItem('fairground.payTo', JSON.stringify(pay));
@@ -77,7 +78,7 @@ try {
   await alice.page.getByRole('button', { name: /^Buy · \$12\.50/ }).click();
   await alice.page.getByLabel(/Details for the seller/).fill('Pickup at 6pm');
   await alice.page.getByRole('button', { name: /Send order and pay \$12\.50/ }).click();
-  await alice.page.getByRole('link', { name: 'Open my wallet' }).waitFor();
+  await alice.page.getByRole('link', { name: 'Open another wallet app' }).waitFor();
   assert.ok(relay.events.some((e) => e.kind === 1059 && e.tags.some((t) => t[0] === 'p' && t[1] === relay.shop)), 'gift-wrapped to the seller');
   assert.ok(!relay.events.some((e) => e.kind === 1059 && e.content.includes('Pickup at 6pm')), 'the relay sees only ciphertext');
   await alice.page.keyboard.press('Escape');
@@ -99,7 +100,7 @@ try {
   await alice.page.getByText(/Offer sent/).waitFor();
   await bob.page.goto(`${url}#/messages/${alice.pubkey}`);
   await bob.page.getByRole('button', { name: /Accept and pay \$40\.00/ }).click({ timeout: 15000 });
-  await bob.page.getByRole('link', { name: 'Open my wallet' }).waitFor();
+  await bob.page.getByRole('link', { name: 'Open another wallet app' }).waitFor();
   await bob.page.keyboard.press('Escape');
 
   step('Alice sees Bob’s order in Selling, accepts it, and Bob sees the update');

@@ -49,8 +49,19 @@ afterwards. Anyone can advertise, including a creator cross-promoting with anoth
 kits (rate, topics, audience survey) so advertisers can find them, and advertisers' payment records (delivered, paid,
 overdue, days to pay) are public, so creators can see who pays before accepting.
 
-**Payment goes straight to the recipient's wallet,** in USDC on Algorand, through an ARC-26 link that opens the payer's
-own wallet. The project never holds or splits funds. Each transfer's memo names what it's for (a deal, fan support, a
+**A wallet built in, and dollars in and out of a bank.** Every account has a wallet: an Algorand account whose key is
+derived from the account's own key, so the backup code and the username-and-password vault restore it, and payments
+are signed on the device in one tap. Nobody else, Fairground included, can move the money. Turning it on is free: a
+small sponsor run by the project sends the ALGO Algorand requires (0.2 for the account and its USDC holding, plus fees
+for about 50 payments) in one atomic group with the wallet's USDC opt-in, once per member and capped per day, with
+both limits read from the chain. Money comes in and goes out through Transak, a licensed on- and off-ramp (card or
+bank transfer to buy, bank payout to sell), opened from the wallet; the gateway creates Transak sessions with the
+partner secret, and checks a sale with Transak before the wallet pays into it. Where that isn't available, exchanges
+such as Kraken send to and receive from the wallet directly. People who prefer their own wallet, including a
+quantum-safe Falcon account in Pera, can still pay through an ARC-26 link or QR code and be paid there.
+
+**Payment goes straight to the recipient's wallet,** in USDC on Algorand, from the built-in wallet or through an ARC-26
+link that opens the payer's own wallet. The project never holds or splits funds. Each transfer's memo names what it's for (a deal, fan support, a
 donation), so the app finds it on the public chain and anyone can verify every flow.
 
 **Prices hold their purchasing power.** Offers, rates and support amounts are set in dollars of a base month and scaled
@@ -161,6 +172,17 @@ the account's vault on relays: keys, settings, AI interests, subscriptions, payo
 - **No escrow, no verified listen counts.** The advertiser pays after the post goes up or the read runs, with the
   public payment record as the enforcement. Deals are a flat fee; listen counts in media kits are what creators report,
   and promo codes are how an advertiser checks them. The gateway doesn't count downloads yet.
+- **The built-in wallet uses Ed25519 keys, not post-quantum ones.** Algorand's native Falcon-1024 accounts use a
+  deterministic Falcon signature that general-purpose JavaScript libraries don't produce (we checked: Algorand rejects
+  a standard Falcon signature). The wallet can be rekeyed to a Falcon key, keeping its address, once a compatible
+  signer exists. Contracts stay hybrid-signed, and anyone can be paid into a Falcon account in Pera instead.
+- **Starting wallets costs the project a little ALGO** (0.25 per wallet, capped per day), from a small hot wallet whose
+  phrase lives in the gateway's environment. A determined abuser could use up a day's cap with fake accounts.
+- **In-app buying and selling need a Transak partner account** (a business sign-up with their verification) and its
+  API key and secret in the gateway. Until then the wallet explains how to use an exchange. Transak's fees, limits and
+  countries apply, and they check identity the first time.
+- **The iOS app** will need publishing from an Apple developer account enrolled as an organization, which Apple
+  requires of apps with wallets.
 - **The public gateway has costs.** Feeds are small and cached, and plain downloads redirect to the creator's file, but
   stitched downloads stream through the gateway, which uses its bandwidth. It runs on Netlify only, so during a
   failover to the backup host feeds are unavailable. Relay operators can run gateways too.
@@ -205,6 +227,7 @@ node e2e/smoke.ts         # end-to-end test of the built app in Chrome, against 
 node e2e/market.ts        # two people: comments, safety, buying, requests, offers and orders
 node e2e/media.ts         # photos, videos, shorts, listening, search, languages, and the desktop and phone layouts
 node e2e/podcast.ts       # a show and episode, a campaign, a recorded read, approval, playback, RSS and stitching, donating
+node e2e/wallet.ts        # turning a wallet on, adding money, paying in one tap, cashing out, donating (stand-in chain)
 npm run gateway:build     # bundles the podcast gateway into dist-gateway/fairground-gateway.js
 ```
 
@@ -247,7 +270,11 @@ Store releases need signing keys and developer accounts, which aren't part of th
 | `src/podcast.ts` | Shows, episodes, Apple categories and RSS feeds |
 | `src/ads.ts` | Campaigns, host-read placements, approvals and dynamic ad breaks |
 | `src/mp3.ts` | MP3 frame layout, for splicing reads in without re-encoding |
-| `src/gateway.ts` | The podcast gateway: feeds, stitched downloads with Range support, health |
+| `src/gateway.ts` | The gateway: podcast feeds, stitched downloads with Range support, wallet starts, Transak sessions, health |
+| `src/walletkey.ts`, `src/wallet.ts` | The built-in wallet: key derivation, balances, USDC payments signed on the device |
+| `src/starter.ts` | Starting new wallets: the sponsor's ALGO and the USDC opt-in in one group |
+| `src/ramp.ts` | Transak sessions and cash-out order checks |
+| `src/httpauth.ts` | Signed HTTP requests (NIP-98) to the gateway |
 | `src/geohash.ts` | Approximate locations for "near me" |
 | `src/feed.ts` | Feed recipes, local ranking with explanations, cold start, local AI embedders |
 | `src/vault.ts` | Username-and-password vaults with passkey and recovery-code factors |
