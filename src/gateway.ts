@@ -17,7 +17,6 @@ import { currentEpisodes, parseShow, renderRss, showAddress, type Episode, type 
 import { verifyAuthHeader } from './httpauth.ts';
 import { membersFrom } from './network.ts';
 import { createRamp, sellOrderProblem, type RampOptions } from './ramp.ts';
-import type { StarterOptions } from './starter.ts';
 
 // Loaded on first use: an edge function must start within a few tens of milliseconds, and most requests are feeds.
 const ads = () => import('./ads.ts');
@@ -39,8 +38,6 @@ export interface GatewayOptions {
   feedHeaders?: Record<string, string>;
   /** Accounts this gateway won't serve, e.g. after a takedown notice. */
   blocked?: string[];
-  /** Starts new built-in wallets (starter.ts). Off unless a sponsor key is configured. */
-  starter?: StarterOptions;
   /** Buying and selling USDC through Transak (ramp.ts). Off unless partner credentials are configured. */
   ramp?: RampOptions;
 }
@@ -266,8 +263,6 @@ export function createGateway(opts: GatewayOptions): (req: Request, info?: Reque
   }
 
   const notFound = (what: string) => new Response(`${what} not found\n`, { status: 404, headers: { ...cors, 'Content-Type': 'text/plain' } });
-  let starterP: Promise<ReturnType<typeof import('./starter.ts')['createStarter']>> | undefined;
-  const starter = () => (opts.starter ? (starterP ??= import('./starter.ts').then((m) => m.createStarter({ fetch: fetchImpl, ...opts.starter! }))) : undefined);
   const ramp = opts.ramp && createRamp({ fetch: fetchImpl, ...opts.ramp });
   const reply = (body: unknown, status = 200) => Response.json(body, { status, headers: { ...cors, 'Cache-Control': 'no-store' } });
 
@@ -280,29 +275,20 @@ export function createGateway(opts: GatewayOptions): (req: Request, info?: Reque
     return auth.pubkey;
   }
 
-  /** The built-in wallet's services: starting a wallet, and buying and selling USDC. */
+  /** The built-in wallet's services: buying and selling through Transak. */
   async function money(req: Request, path: string, info: RequestInfo): Promise<Response | undefined> {
-    if (path === '/wallet/config' && req.method === 'GET') return reply({ starter: (await starter())?.sponsor ?? null, ramp: !!ramp });
-    if (path === '/wallet/start' && req.method === 'POST') {
-      const s = await starter();
-      if (!s) return reply({ error: 'this gateway doesn’t start wallets' }, 503);
-      const body = await req.text();
-      const who = await member(req, body);
-      if (who instanceof Response) return who;
-      const result = await s.start(who, JSON.parse(body || '{}')).catch((e: Error) => ({ status: 502, error: e.message }));
-      return 'txid' in result ? reply(result) : reply({ error: result.error }, result.status);
-    }
+    if (path === '/wallet/config' && req.method === 'GET') return reply({ ramp: !!ramp });
     if (path === '/ramp/session' && req.method === 'POST') {
       if (!ramp) return reply({ error: 'buying and selling aren’t set up on this gateway yet' }, 503);
       const body = await req.text();
       const who = await member(req, body);
       if (who instanceof Response) return who;
-      const p = JSON.parse(body || '{}') as { side?: string; walletAddress?: string; amount?: number; redirectURL?: string };
+      const p = JSON.parse(body || '{}') as { side?: string; walletAddress?: string; amount?: number; redirectURL?: string; asset?: string };
       if ((p.side !== 'BUY' && p.side !== 'SELL') || !/^[A-Z2-7]{58}$/.test(p.walletAddress ?? '') || !/^(https:\/\/|http:\/\/localhost[:/])/.test(p.redirectURL ?? '')) return reply({ error: 'bad request' }, 400);
       const amount = Number(p.amount) > 0 ? Number(p.amount) : undefined;
       try {
         const url = await ramp.session({
-          side: p.side, walletAddress: p.walletAddress!, customer: who, redirectURL: p.redirectURL!, userIp: info.ip ?? '0.0.0.0',
+          side: p.side, walletAddress: p.walletAddress!, customer: who, redirectURL: p.redirectURL!, userIp: info.ip ?? '0.0.0.0', asset: p.asset === 'ALGO' ? 'ALGO' : 'USDC',
           ...(p.side === 'BUY' ? { fiatAmount: amount } : { cryptoAmount: amount }),
         });
         return reply({ url });

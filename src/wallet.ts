@@ -15,7 +15,7 @@ import { USDC_ASSET_ID } from './rails/algorand.ts';
 import type { PaymentRequest } from './rails/rail.ts';
 import { DEFAULT_ALGOD, walletSeed } from './walletkey.ts';
 
-export { DEFAULT_ALGOD, feesLeft, STARTER_MEMO, STARTER_MICROALGOS, walletAddress, walletState, type WalletState } from './walletkey.ts';
+export { convertibleAlgo, DEFAULT_ALGOD, feesLeft, needsFeeTopUp, RESERVE_MICROALGOS, SETUP_MICROALGOS, walletAddress, walletState, type WalletState } from './walletkey.ts';
 
 export interface WalletKeys {
   address: string;
@@ -50,6 +50,9 @@ export const usdcPayment = (sender: string, request: PaymentRequest, params: Txn
   assetTxn(sender, request.to, USDC_ASSET_ID, request.amount, params, new TextEncoder().encode(request.memo));
 
 export const sign = (txn: Txn, seed: Uint8Array): Uint8Array => signTxn(txn, seed);
+
+/** Lets the wallet hold USDC: a zero-amount transfer to itself. */
+export const usdcOptIn = (address: string, params: TxnParams): Txn => assetTxn(address, address, USDC_ASSET_ID, 0n, params);
 
 /** Sends signed transactions (one group) and returns the first one's id. */
 export async function submit(signed: Uint8Array[], algod = DEFAULT_ALGOD, fetchImpl: Fetch = defaultFetch): Promise<string> {

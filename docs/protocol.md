@@ -460,17 +460,19 @@ An account's wallet is the Algorand Ed25519 account whose seed is `HKDF-SHA256(i
 "fairground", info = "algorand-wallet/v1", 32 bytes)`. Payments from it are ordinary USDC transfers with the same memos
 as payment links.
 
-### Starting a wallet
+### Setting up a wallet
 
-A gateway may sponsor new wallets. The wallet builds and signs, and the sponsor rebuilds and checks, one atomic group:
+Fairground funds no wallet. A wallet's first deposit is ALGO (Algorand needs 0.2 ALGO in an account before it can hold
+USDC). Once at least 0.201 ALGO has arrived, the wallet opts in to USDC (a zero-amount USDC transfer to itself), keeps
+0.5 ALGO for its minimum balance and about 300 fees, and converts everything above that, less 0.01 ALGO for the
+conversion's own fees, to USDC. Later deposits are USDC. When fewer than 50 fees' worth of ALGO remain and at least
+$0.20 of USDC does, the wallet converts $0.10 of USDC back to ALGO before its next payment.
 
-1. a payment of 250,000 micro-ALGO from the sponsor to the wallet, fee twice the minimum, note
-   `fairground:starter:<member pubkey>`;
-2. the wallet's USDC opt-in (a zero-amount USDC transfer to itself), fee 0.
-
-Both use the opt-in's validity window and genesis. The sponsor refuses an opt-in that differs in any field from the one
-it would build, a wallet that already holds USDC or 0.2 ALGO, a member who already has a starter payment (found by note
-prefix), and anything past its daily cap (counted the same way).
+Conversions go through Folks Router (application 3279848327), at its minimum fee of 10 basis points and at most 50
+basis points below the quote. The wallet signs the router's transactions only if all are from the wallet, none rekeys
+or closes it, they share one group, total fees are at most 0.02 ALGO, the first sends exactly the quoted amount to the
+router's address, the others are no-op calls to the router (`swap_forward`, then `fi_end_swap`), and the last names
+the expected asset and the quote's minimum.
 
 ### Gateway requests
 
@@ -478,9 +480,8 @@ Wallet and ramp calls carry a NIP-98 `Authorization: Nostr <base64 event>` heade
 `method`, and `payload` (SHA-256 of the body) when there is one, created within 60 seconds. Only members (accounts
 with a key binding) are served.
 
-- `GET /wallet/config` → `{ starter: <sponsor address> | null, ramp: boolean }`
-- `POST /wallet/start` `{ optIn: <base64 signed opt-in> }` → `{ txid }`
-- `POST /ramp/session` `{ side: "BUY" | "SELL", walletAddress, amount?, redirectURL }` → `{ url }`, a single-use
+- `GET /wallet/config` → `{ ramp: boolean }`
+- `POST /ramp/session` `{ side: "BUY" | "SELL", walletAddress, amount?, asset?: "USDC" | "ALGO", redirectURL }` → `{ url }`, a single-use
   Transak widget link; the member's pubkey is the order's `partnerCustomerId`.
 - `GET /ramp/order/<id>` → `{ order, problem }`. A wallet pays into a sale only when `problem` is null: the order is
   the member's own, a sale of USDC on Algorand, and waiting for the USDC. The payment's memo is

@@ -9,9 +9,9 @@ import { algorandUsdc } from '@core/rails/algorand.ts';
 import type { PaymentRequest, Transfer } from '@core/rails/rail.ts';
 import { formatUsd } from '@core/pricing.ts';
 import { useApp } from '../context.ts';
-import { nowSeconds, usd } from '../lib/format.ts';
+import { balance as shown, nowSeconds, usd } from '../lib/format.ts';
 import { useWallet } from '../lib/wallet.ts';
-import { RampSheet, StartWallet } from '../screens/Wallet.tsx';
+import { FirstDeposit, RampSheet, SettleStatus } from '../screens/Wallet.tsx';
 import { Sheet } from './ui.tsx';
 
 interface Props {
@@ -89,16 +89,17 @@ export function PayDialog({ title, description, request, onPaid, onClose }: Prop
       {canPay && (
         <>
           <button type="button" className="btn primary block" disabled={busy} onClick={payNow}>{busy ? 'Paying…' : `Pay ${usd(request.amount)} from my wallet`}</button>
-          <p className="tiny muted center">Wallet balance {usd(balance)}, {usd(balance - request.amount)} after.</p>
+          <p className="tiny muted center">Wallet balance {shown(balance)}, {shown(balance - request.amount)} after.</p>
         </>
       )}
       {wallet.state?.active && !canPay && request.to !== wallet.address && (
         <div className="card stack">
-          <span className="small">Your wallet has {usd(balance)}; this needs {usd(request.amount - balance)} more.</span>
+          <span className="small">Your wallet has {shown(balance)}; this needs {usd(request.amount - balance)} more.</span>
           <button type="button" className="btn primary" onClick={() => setAdding(true)}>Add money</button>
         </div>
       )}
-      {wallet.state && !wallet.state.active && <StartWallet />}
+      {wallet.state && !wallet.state.active && <FirstDeposit compact />}
+      <SettleStatus />
       {(external || (wallet.state && !canPay)) ? (
         <>
           <a className="btn block" href={link}>Open another wallet app</a>

@@ -1,6 +1,6 @@
 /**
  * Dollars in and out, through Transak, a licensed on- and off-ramp that handles identity checks, cards and bank
- * transfers. Buying sends USDC straight to the person's own wallet; selling has the person's wallet send USDC to
+ * transfers. Buying sends crypto straight to the person's own wallet; selling has the person's wallet send USDC to
  * Transak, which pays their bank. Fairground never holds money or bank details, and these server calls only create
  * widget sessions and read the person's own orders, with the partner credentials kept on the gateway.
  */
@@ -56,10 +56,13 @@ export function createRamp(opts: RampOptions) {
   }
 
   return {
-    /** A single-use widget link, valid for five minutes. */
-    async session(p: { side: 'BUY' | 'SELL'; walletAddress: string; customer: string; fiatAmount?: number; cryptoAmount?: number; redirectURL: string; userIp: string; email?: string }): Promise<string> {
+    /**
+     * A single-use widget link, valid for five minutes. A wallet's first deposit buys ALGO, which it needs before it can
+     * hold USDC; after that, deposits buy USDC.
+     */
+    async session(p: { side: 'BUY' | 'SELL'; walletAddress: string; customer: string; fiatAmount?: number; cryptoAmount?: number; redirectURL: string; userIp: string; email?: string; asset?: 'USDC' | 'ALGO' }): Promise<string> {
       const widgetParams: Record<string, unknown> = {
-        apiKey: opts.apiKey, referrerDomain: opts.referrerDomain, productsAvailed: p.side, network: 'algorand', cryptoCurrencyCode: 'USDC',
+        apiKey: opts.apiKey, referrerDomain: opts.referrerDomain, productsAvailed: p.side, network: 'algorand', cryptoCurrencyCode: p.side === 'BUY' ? p.asset ?? 'USDC' : 'USDC',
         fiatCurrency: 'USD', partnerCustomerId: p.customer, redirectURL: p.redirectURL, hideMenu: true, themeColor: 'd9480f',
       };
       if (p.side === 'BUY') Object.assign(widgetParams, { walletAddress: p.walletAddress, disableWalletAddressForm: true, ...(p.fiatAmount ? { fiatAmount: p.fiatAmount } : {}) });

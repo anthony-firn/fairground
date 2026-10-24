@@ -21,7 +21,6 @@ export * from './ads.ts';
 export * from './network.ts';
 export * from './gateway.ts';
 export * from './wallet.ts';
-export * from './starter.ts';
 export * from './ramp.ts';
 export * from './httpauth.ts';
 export * from './language.ts';

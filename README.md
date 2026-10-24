@@ -51,14 +51,16 @@ overdue, days to pay) are public, so creators can see who pays before accepting.
 
 **A wallet built in, and dollars in and out of a bank.** Every account has a wallet: an Algorand account whose key is
 derived from the account's own key, so the backup code and the username-and-password vault restore it, and payments
-are signed on the device in one tap. Nobody else, Fairground included, can move the money. Turning it on is free: a
-small sponsor run by the project sends the ALGO Algorand requires (0.2 for the account and its USDC holding, plus fees
-for about 50 payments) in one atomic group with the wallet's USDC opt-in, once per member and capped per day, with
-both limits read from the chain. Money comes in and goes out through Transak, a licensed on- and off-ramp (card or
-bank transfer to buy, bank payout to sell), opened from the wallet; the gateway creates Transak sessions with the
-partner secret, and checks a sale with Transak before the wallet pays into it. Where that isn't available, exchanges
-such as Kraken send to and receive from the wallet directly. People who prefer their own wallet, including a
-quantum-safe Falcon account in Pera, can still pay through an ARC-26 link or QR code and be paid there.
+are signed on the device in one tap. Nobody else, Fairground included, can move the money, and Fairground funds no
+one's wallet. Money comes in and goes out through Transak, a licensed on- and off-ramp (card or bank transfer to buy,
+bank payout to sell), opened from the wallet. Algorand accounts need a little ALGO before they can hold USDC, so a
+wallet's first deposit buys ALGO: when it arrives the wallet opts in to USDC, keeps 0.5 ALGO (about five cents) for its
+account minimum and network fees, and converts the rest to dollars through Folks Router, an aggregator of Algorand's
+exchanges, checking every transaction the router asks it to sign. Later deposits buy USDC directly, and if fees run
+low the wallet turns a few cents of its own USDC back into ALGO. The gateway creates Transak sessions with the partner
+secret, and checks a sale with Transak before the wallet pays into it. Where Transak isn't available, exchanges such as
+Kraken send to and receive from the wallet directly. People who prefer their own wallet, including a quantum-safe
+Falcon account in Pera, can still pay through an ARC-26 link or QR code and be paid there.
 
 **Payment goes straight to the recipient's wallet,** in USDC on Algorand, from the built-in wallet or through an ARC-26
 link that opens the payer's own wallet. The project never holds or splits funds. Each transfer's memo names what it's for (a deal, fan support, a
@@ -176,8 +178,9 @@ the account's vault on relays: keys, settings, AI interests, subscriptions, payo
   deterministic Falcon signature that general-purpose JavaScript libraries don't produce (we checked: Algorand rejects
   a standard Falcon signature). The wallet can be rekeyed to a Falcon key, keeping its address, once a compatible
   signer exists. Contracts stay hybrid-signed, and anyone can be paid into a Falcon account in Pera instead.
-- **Starting wallets costs the project a little ALGO** (0.25 per wallet, capped per day), from a small hot wallet whose
-  phrase lives in the gateway's environment. A determined abuser could use up a day's cap with fake accounts.
+- **A wallet's first deposit pays for its own setup.** About five cents of it stays as ALGO for Algorand's account
+  minimum and fees, and converting the rest costs the router's 0.1% plus the exchange's fee and a little price
+  movement (at most 0.5% below the quote, or the conversion fails). The provider's minimum purchase applies.
 - **In-app buying and selling need a Transak partner account** (a business sign-up with their verification) and its
   API key and secret in the gateway. Until then the wallet explains how to use an exchange. Transak's fees, limits and
   countries apply, and they check identity the first time.
@@ -227,7 +230,7 @@ node e2e/smoke.ts         # end-to-end test of the built app in Chrome, against 
 node e2e/market.ts        # two people: comments, safety, buying, requests, offers and orders
 node e2e/media.ts         # photos, videos, shorts, listening, search, languages, and the desktop and phone layouts
 node e2e/podcast.ts       # a show and episode, a campaign, a recorded read, approval, playback, RSS and stitching, donating
-node e2e/wallet.ts        # turning a wallet on, adding money, paying in one tap, cashing out, donating (stand-in chain)
+node e2e/wallet.ts        # a first deposit setting up a wallet, paying in one tap, cashing out, donating (stand-ins)
 npm run gateway:build     # bundles the podcast gateway into dist-gateway/fairground-gateway.js
 ```
 
@@ -270,10 +273,10 @@ Store releases need signing keys and developer accounts, which aren't part of th
 | `src/podcast.ts` | Shows, episodes, Apple categories and RSS feeds |
 | `src/ads.ts` | Campaigns, host-read placements, approvals and dynamic ad breaks |
 | `src/mp3.ts` | MP3 frame layout, for splicing reads in without re-encoding |
-| `src/gateway.ts` | The gateway: podcast feeds, stitched downloads with Range support, wallet starts, Transak sessions, health |
+| `src/gateway.ts` | The gateway: podcast feeds, stitched downloads with Range support, Transak sessions, health |
 | `src/walletkey.ts`, `src/wallet.ts` | The built-in wallet: key derivation, balances, USDC payments signed on the device |
 | `src/algotx.ts` | The two Algorand transactions Fairground makes, encoded byte-for-byte as the network expects (checked against the Algorand SDK in tests) |
-| `src/starter.ts` | Starting new wallets: the sponsor's ALGO and the USDC opt-in in one group |
+| `src/swap.ts` | Converting ALGO and USDC through Folks Router, with every transaction checked before signing |
 | `src/ramp.ts` | Transak sessions and cash-out order checks |
 | `src/httpauth.ts` | Signed HTTP requests (NIP-98) to the gateway |
 | `src/geohash.ts` | Approximate locations for "near me" |

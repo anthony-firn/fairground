@@ -8,6 +8,7 @@ import { Decoder } from 'algorand-msgpack';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { base64 } from '@scure/base';
 import { MAINNET_GENESIS_HASH, USDC_ASSET_ID } from '../src/rails/algorand.ts';
+import { minReceive, ROUTER_APP } from '../src/swap.ts';
 
 export const ALGOD = 'https://algod.test';
 export const INDEXER = 'https://indexer.test';
@@ -91,6 +92,18 @@ export function createFakeChain(origins: { algod: string; indexer: string } = { 
           get(to).usdc! += x.amount;
         }
         recorded.push({ id: txn.txID(), type: 'axfer', sender, receiver: to, amount: x.amount, asset: USDC_ASSET_ID, note: txn.note, round, time: Math.floor(Date.now() / 1000) });
+      } else if (txn.type === 'appl' && txn.applicationCall!.appIndex === ROUTER_APP) {
+        // The router: the swap's last call delivers its minimum to the caller, from the router's own liquidity.
+        const args = txn.applicationCall!.appArgs;
+        if (Buffer.from(args[0]).toString('hex') === '7dde205e') {
+          const to = algosdk.decodeUint64(args[1], 'bigint');
+          const amount = algosdk.decodeUint64(args[2], 'bigint');
+          if (to === 0n) from.algo += amount;
+          else {
+            if (from.usdc === null) throw new Error('receiver not opted in to USDC');
+            from.usdc += amount;
+          }
+        }
       } else throw new Error(`unsupported type ${txn.type}`);
     }
     for (const [addr, a] of draft) if (a.algo < minimum(a) && (a.algo !== 0n || a.usdc !== null)) throw new Error(`balance ${a.algo} below min ${minimum(a)} for ${addr}`);
@@ -173,4 +186,37 @@ export function createFakeChain(origins: { algod: string; indexer: string } = { 
       if (usdc !== undefined) a.usdc = (a.usdc ?? 0n) + usdc;
     },
   };
+}
+
+/** A stand-in for Folks Router's API: one ALGO is worth `usdcPerAlgo` dollars. */
+export function createFakeRouter(usdcPerAlgo = 0.1, api = 'https://router.test/v2') {
+  const router = algosdk.getApplicationAddress(ROUTER_APP).toString();
+  const rate = BigInt(Math.round(usdcPerAlgo * 1e6));
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    const q = url.searchParams;
+    if (url.pathname.endsWith('/fetch/quote')) {
+      const from = Number(q.get('fromAsset'));
+      const to = Number(q.get('toAsset'));
+      const amount = BigInt(q.get('amount')!);
+      const quote = from === 0 ? (amount * rate) / 1_000_000n : (amount * 1_000_000n) / rate;
+      const payload = Buffer.from(JSON.stringify({ from, to, amount: String(amount), quote: String(quote) })).toString('base64');
+      return Response.json({ success: true, result: { quoteAmount: String(quote), priceImpact: 0.0003, microalgoTxnsFee: 8000, txnPayload: payload } });
+    }
+    if (url.pathname.endsWith('/prepare/swap')) {
+      const p = JSON.parse(Buffer.from(q.get('txnPayload')!, 'base64').toString());
+      const user = q.get('userAddress')!;
+      const min = minReceive({ quote: BigInt(p.quote) }, Number(q.get('slippageBps')));
+      const sp = { flatFee: true, fee: 1000n, minFee: 1000n, firstValid: 1000n, lastValid: 2000n, genesisID: 'mainnet-v1.0', genesisHash: algosdk.base64ToBytes(MAINNET_GENESIS_HASH) };
+      const send = p.from === 0
+        ? algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: user, receiver: router, amount: BigInt(p.amount), suggestedParams: sp })
+        : algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({ sender: user, receiver: router, amount: BigInt(p.amount), assetIndex: p.from, suggestedParams: sp });
+      const forward = algosdk.makeApplicationNoOpTxnFromObject({ sender: user, appIndex: ROUTER_APP, appArgs: [Buffer.from('f06714c8', 'hex'), algosdk.encodeUint64(0)], foreignAssets: [0, USDC_ASSET_ID], suggestedParams: { ...sp, fee: 7000n } });
+      const end = algosdk.makeApplicationNoOpTxnFromObject({ sender: user, appIndex: ROUTER_APP, appArgs: [Buffer.from('7dde205e', 'hex'), algosdk.encodeUint64(p.to), algosdk.encodeUint64(min), algosdk.encodeUint64(0), algosdk.decodeAddress(user).publicKey], foreignAssets: [p.to || USDC_ASSET_ID], suggestedParams: { ...sp, fee: 0n } });
+      algosdk.assignGroupID([send, forward, end]);
+      return Response.json({ success: true, result: [send, forward, end].map((t) => Buffer.from(algosdk.encodeUnsignedTransaction(t)).toString('base64')) });
+    }
+    return Response.json({ success: false, errors: 'no route' }, { status: 404 });
+  };
+  return { fetch: fetchImpl, api };
 }

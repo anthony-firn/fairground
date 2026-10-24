@@ -19,6 +19,10 @@ export function timeAgo(unix: number, now = Date.now() / 1000): string {
 }
 
 /** `$505.00`, keeping sub-cent digits only when they exist. */
-export const usd = (micros: bigint): string => `$${formatUsd(micros)}`;
+/** Dollars for display, to the nearest cent (payments still carry the exact amount). */
+export const usd = (micros: bigint): string => `$${formatUsd(((micros + 5_000n) / 10_000n) * 10_000n)}`;
+
+/** A balance, rounded down to the cent, so it never shows more than is there. */
+export const balance = (micros: bigint): string => `$${formatUsd((micros / 10_000n) * 10_000n)}`;
 
 export const nowSeconds = (): number => Math.floor(Date.now() / 1000);

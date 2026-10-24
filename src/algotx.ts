@@ -120,3 +120,79 @@ export const verifyTxnSig = (t: Txn, sig: Uint8Array, address: string): boolean 
     return false;
   }
 };
+
+/** Decodes the MessagePack subset Algorand transactions use. Integers come back as bigints. */
+export function decodeMsgpack(bytes: Uint8Array): Value {
+  let at = 0;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const take = (n: number) => {
+    if (at + n > bytes.length) throw new Error('truncated MessagePack');
+    const out = bytes.subarray(at, at + n);
+    at += n;
+    return out;
+  };
+  const uintN = (n: number): bigint => {
+    let v = 0n;
+    for (const b of take(n)) v = (v << 8n) | BigInt(b);
+    return v;
+  };
+  const str = (n: number) => new TextDecoder().decode(take(n));
+  const array = (n: number): Value[] => Array.from({ length: n }, () => read());
+  const map = (n: number) => {
+    const out: { [key: string]: Value } = {};
+    for (let i = 0; i < n; i++) {
+      const k = read();
+      if (typeof k !== 'string') throw new Error('non-string map key');
+      out[k] = read();
+    }
+    return out;
+  };
+  function read(): Value {
+    const t = take(1)[0];
+    if (t < 0x80) return BigInt(t);
+    if (t >= 0x80 && t <= 0x8f) return map(t & 0x0f);
+    if (t >= 0x90 && t <= 0x9f) return array(t & 0x0f);
+    if (t >= 0xa0 && t <= 0xbf) return str(t & 0x1f);
+    if (t >= 0xe0) return BigInt(t - 0x100);
+    switch (t) {
+      case 0xc2: return 0n;
+      case 0xc3: return 1n;
+      case 0xc4: return take(Number(uintN(1))).slice();
+      case 0xc5: return take(Number(uintN(2))).slice();
+      case 0xc6: return take(Number(uintN(4))).slice();
+      case 0xcc: return uintN(1);
+      case 0xcd: return uintN(2);
+      case 0xce: return uintN(4);
+      case 0xcf: return uintN(8);
+      case 0xd0: return BigInt(view.getInt8(take(1).byteOffset - bytes.byteOffset));
+      case 0xd9: return str(Number(uintN(1)));
+      case 0xda: return str(Number(uintN(2)));
+      case 0xdc: return array(Number(uintN(2)));
+      case 0xde: return map(Number(uintN(2)));
+      default: throw new Error(`unsupported MessagePack type 0x${t.toString(16)}`);
+    }
+  }
+  const v = read();
+  if (at !== bytes.length) throw new Error('trailing bytes after MessagePack value');
+  return v;
+}
+
+export const decodeTxn = (raw: Uint8Array): Txn => {
+  const v = decodeMsgpack(raw);
+  if (typeof v !== 'object' || v instanceof Uint8Array || Array.isArray(v)) throw new Error('not a transaction');
+  return v as Txn;
+};
+
+/** Signs exactly the bytes of an unsigned transaction someone else built (after checking it). */
+export function signRaw(raw: Uint8Array, seed: Uint8Array): Uint8Array {
+  const sig = ed25519.sign(concat(tag('TX'), raw), seed);
+  // A signed transaction is the map {sig, txn}; the transaction's own bytes are already its canonical encoding.
+  return concat(new Uint8Array([0x82]), encode('sig'), encode(sig), encode('txn'), raw);
+}
+
+/** The account an application holds funds in. */
+export function applicationAddress(appId: bigint): string {
+  const id = new Uint8Array(8);
+  for (let i = 0; i < 8; i++) id[7 - i] = Number((appId >> BigInt(8 * i)) & 0xffn);
+  return encodeAddressKey(sha512_256(concat(tag('appID'), id)));
+}

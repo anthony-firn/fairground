@@ -19,7 +19,7 @@ import { useProfile } from '../lib/hooks.ts';
 import { publish, query } from '../lib/net.ts';
 import { save } from '../lib/storage.ts';
 import { useEditProfile } from './Profile.tsx';
-import { StartWallet } from './Wallet.tsx';
+import { FirstDeposit, SettleStatus } from './Wallet.tsx';
 import { getPaidHere, useWallet } from '../lib/wallet.ts';
 import { showPath, useMyShows } from './Podcast.tsx';
 
@@ -28,7 +28,7 @@ function BuiltInPayout({ onSaved }: { onSaved: (address: string) => void }) {
   const { account } = useApp();
   const wallet = useWallet(account);
   if (!wallet.state) return <div className="skeleton" />;
-  if (!wallet.state.active) return <StartWallet onStarted={() => (getPaidHere(account), onSaved(wallet.address))} />;
+  if (!wallet.state.active) return <><FirstDeposit compact /><SettleStatus /></>;
   return (
     <button type="button" className="btn primary block" onClick={() => (getPaidHere(account), onSaved(wallet.address))}>
       Use my Fairground wallet ({usd(wallet.state.usdc)})

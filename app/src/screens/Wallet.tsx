@@ -1,19 +1,20 @@
 /**
  * The wallet: a balance in dollars, money in and out of a bank through Transak, sending and receiving, and what came
  * and went. The money is USDC (digital dollars) on Algorand in an account only this device can sign for; Fairground
- * never holds it. Until in-app buying and selling is switched on, exchanges can send to and receive from it directly.
+ * never holds it or funds it. A wallet is set up by its owner's first deposit. Until in-app buying and selling is
+ * switched on, exchanges can send to and receive from it directly.
  */
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { algorandUsdc, isAlgorandAddress } from '@core/rails/algorand.ts';
 import type { Transfer } from '@core/rails/rail.ts';
 import { formatUsd, parseUsd } from '@core/pricing.ts';
-import { feesLeft } from '@core/walletkey.ts';
+import { feesLeft, SETUP_MICROALGOS } from '@core/walletkey.ts';
 import { Field, Sheet, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
 import { payoutAddress } from '../lib/data.ts';
-import { nowSeconds, timeAgo, usd } from '../lib/format.ts';
-import { getPaidHere, useWallet } from '../lib/wallet.ts';
+import { balance, nowSeconds, timeAgo, usd } from '../lib/format.ts';
+import { getPaidHere, useSettle, useWallet } from '../lib/wallet.ts';
 
 const actions = () => import('../lib/walletActions.ts');
 
@@ -27,38 +28,33 @@ function label(t: Transfer, mine: string): string {
   return what[kind ?? ''] ?? (out ? 'Sent' : 'Received');
 }
 
-/** Turning the wallet on, which the project's sponsor pays for. */
-export function StartWallet({ onStarted }: { onStarted?: () => void }) {
-  const { account, toast } = useApp();
-  const { config, address } = useWallet(account);
-  const [busy, setBusy] = useState(false);
-  if (config && !config.starter) {
-    return (
-      <div className="card stack">
-        <strong>Turn on your wallet</strong>
-        <span className="small">Send 0.25 ALGO to this address from an exchange or another wallet. That covers Algorand’s minimum balance and about 50 payments’ fees.</span>
-        <code className="tiny" style={{ wordBreak: 'break-all' }}>{address}</code>
-      </div>
-    );
-  }
+/**
+ * A new wallet is set up by its first deposit. Algorand accounts need a little ALGO (its own currency) before they can
+ * hold dollars, so the first deposit arrives as ALGO: the wallet keeps about five cents' worth for its account minimum
+ * and network fees, and converts the rest to dollars.
+ */
+export function FirstDeposit({ compact }: { compact?: boolean }) {
+  const [adding, setAdding] = useState(false);
   return (
     <div className="card stack">
-      <strong>Turn on your wallet</strong>
-      <span className="small">Pay and get paid in digital dollars, right here. It’s free: Fairground covers the setup. Only this account can move the money in it.</span>
-      <button type="button" className="btn primary" disabled={busy || !config} onClick={async () => {
-        setBusy(true);
-        try {
-          await (await actions()).startWallet(account, config!.starter!);
-          toast('Your wallet is on.');
-          onStarted?.();
-        } catch (e) {
-          toast((e as Error).message);
-        } finally {
-          setBusy(false);
-        }
-      }}>{busy ? 'Turning it on…' : 'Turn on my wallet'}</button>
+      <strong>Set up your wallet with a first deposit</strong>
+      <span className="small">Add any amount from your bank or card. It stays yours: the wallet keeps about 5 cents of it for Algorand’s account minimum
+        and network fees, and the rest becomes your dollar balance.</span>
+      {!compact && <span className="tiny muted">The first deposit arrives as ALGO, Algorand’s own currency, and is converted to dollars automatically. After that, deposits arrive as dollars.</span>}
+      <button type="button" className="btn primary" onClick={() => setAdding(true)}>Add money</button>
+      {adding && <RampSheet side="BUY" onClose={() => setAdding(false)} />}
     </div>
   );
+}
+
+/** What the wallet is doing with a deposit, while it's on screen. */
+export function SettleStatus() {
+  const { account } = useApp();
+  const { state } = useWallet(account);
+  const settle = useSettle(account, state);
+  if (settle.status === 'working') return <p className="small center"><span className="dot warn" /> {state?.active ? 'Converting your deposit to dollars…' : 'Your deposit arrived. Setting up your wallet and converting it to dollars…'}</p>;
+  if (settle.status === 'error') return <p className="small warn">Couldn’t finish converting your deposit: {settle.error} <button type="button" className="btn small" onClick={settle.retry}>Try again</button></p>;
+  return null;
 }
 
 /** Buying or selling through Transak, or, where that isn't available, how to do it with an exchange. */
@@ -68,11 +64,13 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
   const [amount, setAmount] = useState(initial ?? (side === 'BUY' ? '25' : state ? formatUsd(state.usdc) : ''));
   const [opened, setOpened] = useState(false);
   const buy = side === 'BUY';
+  // Until the wallet is set up, deposits arrive as ALGO, which it needs before it can hold dollars.
+  const asset = buy && !state?.active ? 'ALGO' : 'USDC';
   async function open() {
     // Open the window first, in the click, so browsers don't block it; then point it at the session.
     const win = window.open('about:blank', '_blank');
     try {
-      const url = await (await actions()).rampSession(account, side, address, Number(amount) || undefined);
+      const url = await (await actions()).rampSession(account, side, address, Number(amount) || undefined, asset);
       if (win) win.location.href = url;
       else location.href = url;
       setOpened(true);
@@ -86,9 +84,9 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
       <Sheet title={buy ? 'Add money' : 'Cash out'} onClose={onClose}>
         {buy ? (
           <ol className="small stack" style={{ paddingLeft: 20, margin: 0 }}>
-            <li>Buy USDC at an exchange that supports USDC on Algorand, such as Kraken, paying from your bank.</li>
-            <li>Withdraw it to this address, choosing the <strong>Algorand</strong> network:<br /><code className="tiny" style={{ wordBreak: 'break-all' }}>{address}</code></li>
-            <li>It shows here within seconds of the exchange sending it.</li>
+            <li>At an exchange such as Kraken, buy {asset === 'ALGO' ? <><strong>ALGO</strong> (any amount over 1 ALGO)</> : <>USDC on Algorand</>}, paying from your bank.</li>
+            <li>Withdraw it to this address{asset === 'USDC' ? <>, choosing the <strong>Algorand</strong> network</> : ''}:<br /><code className="tiny" style={{ wordBreak: 'break-all' }}>{address}</code></li>
+            <li>{asset === 'ALGO' ? 'Open your wallet here once it arrives: it sets itself up and converts the ALGO to dollars.' : 'It shows here within seconds of the exchange sending it.'}</li>
           </ol>
         ) : (
           <ol className="small stack" style={{ paddingLeft: 20, margin: 0 }}>
@@ -104,11 +102,12 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
   return (
     <Sheet title={buy ? 'Add money' : 'Cash out'} onClose={onClose}>
       {opened ? (
-        <p className="small">{buy ? 'Finish in the Transak window. The money arrives here as soon as they send it, usually within minutes for a card and a few days for a bank transfer.'
+        <p className="small">{buy ? `Finish in the Transak window. The money arrives here as soon as they send it, usually within minutes for a card and a few days for a bank transfer.${asset === 'ALGO' ? ' Keep this page open, or come back: the wallet sets itself up and converts it to dollars.' : ''}`
           : 'Finish in the Transak window. When it asks you to send the USDC, you’ll come back here to confirm.'}</p>
       ) : (
         <>
           <Field label={buy ? 'Amount ($)' : 'Amount to cash out ($)'}><input type="text" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></Field>
+          {asset === 'ALGO' && <p className="small">This first deposit also sets up your wallet: it arrives as ALGO and is converted to dollars, keeping about 5 cents for fees.</p>}
           <p className="small muted">{buy ? 'Pay by card or bank transfer through Transak, a licensed payments company; they verify your identity the first time. Fairground never sees your card or bank details and takes no fee.'
             : 'Transak pays your bank account; they verify your identity the first time. Fairground never sees your bank details and takes no fee.'}</p>
           <button type="button" className="btn primary block" disabled={!(Number(amount) > 0)} onClick={open}>Continue with Transak</button>
@@ -233,11 +232,12 @@ export function WalletScreen({ query }: { query: URLSearchParams }) {
       <div className="page">
         <div className="card stack center wallet-balance">
           <span className="small muted">Balance</span>
-          <strong style={{ fontSize: 40 }}>{state ? usd(state.usdc) : '…'}</strong>
+          <strong style={{ fontSize: 40 }}>{state ? balance(state.usdc) : '…'}</strong>
           <span className="tiny muted">Digital dollars (USDC). Only this account can move them.</span>
         </div>
         {error && <p className="small warn">{error}</p>}
-        {state && !state.active && <StartWallet />}
+        {state && !state.active && state.algo < SETUP_MICROALGOS && <FirstDeposit />}
+        <SettleStatus />
         {state?.active && (
           <>
             <div className="wallet-actions">
@@ -253,7 +253,7 @@ export function WalletScreen({ query }: { query: URLSearchParams }) {
               </div>
             )}
             {paidHere && <p className="tiny muted center">Sponsorships, fan support and sales are paid into this wallet.</p>}
-            {feesLeft(state) < 5 && <p className="small warn">The wallet is low on ALGO for network fees. Add a little ALGO to its address, or a few cents’ worth when you add money.</p>}
+            {feesLeft(state) < 9 && <p className="small warn">The wallet is out of ALGO for network fees. Send it 1 ALGO from an exchange, and it carries on.</p>}
             <h2>Activity</h2>
             {activity === undefined && <div className="skeleton" />}
             {activity?.length === 0 && <p className="small muted">Nothing yet.</p>}

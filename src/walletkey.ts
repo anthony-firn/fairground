@@ -10,9 +10,14 @@ import { encodeAddress, USDC_ASSET_ID } from './rails/algorand.ts';
 /** Nodely's free public algod. Any Algorand mainnet node works. */
 export const DEFAULT_ALGOD = 'https://mainnet-api.4160.nodely.dev';
 
-/** What a new wallet is given to start: Algorand's 0.1 ALGO account minimum, 0.1 to hold USDC, and fees for ~50 payments. */
-export const STARTER_MICROALGOS = 250_000n;
-export const STARTER_MEMO = 'fairground:starter';
+/**
+ * ALGO a wallet keeps for itself: Algorand's 0.1 ALGO account minimum, 0.1 more to hold USDC, and fees for about 300
+ * transactions. Everything above it is converted to dollars.
+ */
+export const RESERVE_MICROALGOS = 500_000n;
+
+/** ALGO a wallet needs before it can opt in to USDC: the two minimums plus the opt-in's fee. */
+export const SETUP_MICROALGOS = 201_000n;
 
 /** The wallet's Ed25519 seed, derived from the Fairground account's Nostr key with HKDF-SHA256. */
 export const walletSeed = (nostrKey: Uint8Array): Uint8Array =>
@@ -49,3 +54,13 @@ export async function walletState(address: string, algod = DEFAULT_ALGOD, fetchI
 
 /** Network fees still covered by the wallet's ALGO above its minimum. */
 export const feesLeft = (s: Pick<WalletState, 'algo' | 'minimum'>, fee = 1000n): number => Number(s.algo > s.minimum ? (s.algo - s.minimum) / fee : 0n);
+
+/** ALGO above the reserve that's worth converting to dollars (at least 1 ALGO, after ~0.01 ALGO of swap fees). */
+export function convertibleAlgo(s: Pick<WalletState, 'algo' | 'active'>): bigint {
+  const spare = s.algo - RESERVE_MICROALGOS - 10_000n;
+  return s.active && spare >= 1_000_000n ? spare : 0n;
+}
+
+/** Whether to turn a few cents of USDC into ALGO before fees run out (a conversion itself costs about 8 fees). */
+export const needsFeeTopUp = (s: Pick<WalletState, 'algo' | 'minimum' | 'usdc' | 'active'>): boolean =>
+  s.active && feesLeft(s) < 50 && feesLeft(s) >= 9 && s.usdc >= 200_000n;
