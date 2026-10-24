@@ -62,7 +62,9 @@ const titleOf = (m: MediaItem) => m.title || m.description.split('\n')[0].slice(
 
 export function PhotosScreen() {
   const { recipeVersion, navigate } = useApp();
-  const { items, ready } = useMediaFeed('photo', recipeVersion);
+  const { items: all, ready } = useMediaFeed('photo', recipeVersion);
+  const [broken, setBroken] = useState(new Set<string>());
+  const items = all.filter((m) => !broken.has(m.event.id));
   const { liked, like } = useLike();
   return (
     <>
@@ -78,7 +80,7 @@ export function PhotosScreen() {
               <span className="grow"><strong className="small"><Name pubkey={m.event.pubkey} /></strong><br /><span className="tiny muted">{timeAgo(m.event.created_at)}</span></span>
             </div>
             <button type="button" className="photo-frame" onClick={() => navigate(mediaPath(m.event.id))} aria-label={`Open ${titleOf(m)}`}>
-              <img src={m.images[0]} alt={m.title ?? ''} loading="lazy" referrerPolicy="no-referrer" />
+              <img src={m.images[0]} alt={m.title ?? ''} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken((set) => new Set(set).add(m.event.id))} />
               {m.images.length > 1 && <span className="badge photo-count">1/{m.images.length}</span>}
             </button>
             <div className="post-actions" style={{ padding: '0 10px' }}>
@@ -93,17 +95,47 @@ export function PhotosScreen() {
   );
 }
 
-function VideoCard({ m }: { m: MediaItem }) {
-  const { navigate } = useApp();
+/**
+ * A video's thumbnail: its poster, or else a frame of the video itself. Frames load only near the screen, because
+ * browsers fetch only a few videos from one server at a time, and a placeholder shows until one is ready. Hovering
+ * plays a muted preview.
+ */
+function VideoThumb({ m }: { m: MediaItem }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const video = useRef<HTMLVideoElement>(null);
+  const [near, setNear] = useState(false);
+  const [shown, setShown] = useState(false);
+  const [posterFailed, setPosterFailed] = useState(false);
+  const poster = posterFailed ? undefined : m.video?.poster;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setNear(true);
+        io.disconnect();
+      }
+    }, { rootMargin: '300px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
   const duration = formatDuration(m.video?.duration);
   return (
+    <span ref={ref} className="video-thumb" onMouseEnter={() => video.current?.play().catch(() => undefined)} onMouseLeave={() => video.current?.pause()}>
+      <span className="thumb-ph" aria-hidden="true"><Icon name="play" /></span>
+      {near && (poster
+        ? <img src={poster} alt="" referrerPolicy="no-referrer" className={shown ? 'on' : ''} onLoad={() => setShown(true)} onError={() => setPosterFailed(true)} />
+        : <video ref={video} src={`${m.video!.url}#t=0.5`} preload="metadata" muted playsInline loop className={shown ? 'on' : ''} onLoadedData={() => setShown(true)} />)}
+      {duration && <span className="duration">{duration}</span>}
+    </span>
+  );
+}
+
+function VideoCard({ m }: { m: MediaItem }) {
+  const { navigate } = useApp();
+  return (
     <button type="button" className="video-card" onClick={() => navigate(mediaPath(m.event.id))}>
-      <span className="video-thumb">
-        {m.video?.poster
-          ? <img src={m.video.poster} alt="" loading="lazy" referrerPolicy="no-referrer" />
-          : <video src={`${m.video!.url}#t=0.5`} preload="metadata" muted playsInline />}
-        {duration && <span className="duration">{duration}</span>}
-      </span>
+      <VideoThumb m={m} />
       <span className="row" style={{ alignItems: 'flex-start', gap: 10 }}>
         <Avatar pubkey={m.event.pubkey} />
         <span className="grow" style={{ textAlign: 'left' }}>
