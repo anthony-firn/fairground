@@ -13,6 +13,10 @@ const paths: Record<string, string> = {
   back: 'M15 18l-6-6 6-6',
   chevron: 'M9 18l6-6-6-6',
   check: 'M5 12l5 5L20 7',
+  more: 'M5 12h.01M12 12h.01M19 12h.01',
+  comment: 'M21 12a8 8 0 0 1-11.6 7.1L4 21l1.9-5.4A8 8 0 1 1 21 12z',
+  up: 'M12 19V5M5 12l7-7 7 7',
+  down: 'M12 5v14M19 12l-7 7-7-7',
 };
 
 export function Icon({ name, filled }: { name: keyof typeof paths | string; filled?: boolean }) {

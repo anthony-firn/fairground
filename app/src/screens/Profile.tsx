@@ -15,6 +15,7 @@ import { setFollowing } from '../lib/feedEngine.ts';
 import { nowSeconds, shortKey, usd } from '../lib/format.ts';
 import { rememberProfile, useEvents, useProfile } from '../lib/hooks.ts';
 import { publish, query } from '../lib/net.ts';
+import { allowed, isBlocked, safetySettings } from '../lib/safety.ts';
 import { load, save } from '../lib/storage.ts';
 
 export interface Supporting {
@@ -144,7 +145,9 @@ export function Profile({ pubkey }: { pubkey: string }) {
   const [supporting, setSupporting] = useState(false);
   const edit = useEditProfile();
   const { events: posts, loading } = useEvents({ kinds: [1], authors: [pubkey], limit: 40 });
-  const topLevel = posts.filter((p: Event) => !p.tags.some((t) => t[0] === 'e' && (!t[3] || t[3] === 'reply' || t[3] === 'root')));
+  const settings = safetySettings();
+  const topLevel = posts.filter((p: Event) => !p.tags.some((t) => t[0] === 'e' && (!t[3] || t[3] === 'reply' || t[3] === 'root')))
+    .filter((p) => allowed(p, { ...settings, allLanguages: true }, true));
 
   useEffect(() => {
     (async () => {
@@ -167,6 +170,14 @@ export function Profile({ pubkey }: { pubkey: string }) {
     }
   }
 
+  if (isBlocked(pubkey)) {
+    return (
+      <>
+        <TopBar title="Account blocked" back={() => history.back()} />
+        <p className="page muted">This account posted content that is never shown here, so it is blocked.</p>
+      </>
+    );
+  }
   return (
     <>
       <TopBar title={<Name pubkey={pubkey} />} back={() => history.back()} />

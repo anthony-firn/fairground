@@ -8,6 +8,8 @@ export interface Profile {
   display_name?: string;
   about?: string;
   picture?: string;
+  /** NIP-24: the account says it's automated. */
+  bot?: boolean;
   created_at: number;
 }
 
@@ -33,6 +35,7 @@ export function rememberProfile(ev: Event): void {
       display_name: typeof p.display_name === 'string' ? p.display_name.slice(0, 80) : undefined,
       about: typeof p.about === 'string' ? p.about.slice(0, 2000) : undefined,
       picture: typeof p.picture === 'string' && /^https:\/\//.test(p.picture) ? p.picture : undefined,
+      bot: p.bot === true,
       created_at: ev.created_at,
     });
     notify();

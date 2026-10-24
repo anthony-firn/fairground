@@ -12,6 +12,7 @@ interface Props {
   liked?: boolean;
   onReact?: (post: Event, reaction: Reaction) => void;
   onWhy?: (ranked: RankedPost) => void;
+  onMenu?: (post: Event) => void;
 }
 
 /** Reading a post for a few seconds counts as interest, and credits the relay that delivered it. */
@@ -34,7 +35,7 @@ function useRead(onRead: (() => void) | undefined) {
   return ref;
 }
 
-export function PostCard({ post, ranked, liked, onReact, onWhy }: Props) {
+export function PostCard({ post, ranked, liked, onReact, onWhy, onMenu }: Props) {
   const { navigate } = useApp();
   const ref = useRead(onReact ? () => onReact(post, 'read') : undefined);
   const openProfile = () => navigate(`/p/${post.pubkey}`);
@@ -58,6 +59,7 @@ export function PostCard({ post, ranked, liked, onReact, onWhy }: Props) {
               <button type="button" className="icon-btn" onClick={() => onWhy(ranked)} aria-label="Why am I seeing this?"><Icon name="info" /> Why</button>
             )}
             <button type="button" className="icon-btn" onClick={() => onReact(post, 'less')} aria-label="Show less like this"><Icon name="less" /> Less</button>
+            {onMenu && <button type="button" className="icon-btn" onClick={() => onMenu(post)} aria-label="More options"><Icon name="more" /></button>}
           </div>
         )}
       </div>

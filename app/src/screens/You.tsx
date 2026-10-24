@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { SEED_ACCOUNTS } from '@core/safety.ts';
+import { resetNetwork } from '../lib/safety.ts';
 import { KIND } from '@core/kinds.ts';
 import { DEFAULT_RELAYS } from '@core/defaults.ts';
 import { createRecipeEvent, DEFAULT_RECIPE, PRESET_RECIPES, recipeFromEvent, type FeedRecipe, type Signal } from '@core/feed.ts';
@@ -105,7 +107,19 @@ export function FeedSettings() {
           <Field label="Hide posts with these words" hint="Separate with commas.">
             <input type="text" value={muted} onChange={(e) => setMuted(e.target.value)} onBlur={() => apply({ ...recipe, mutedWords: muted.split(',').map((w) => w.trim().toLowerCase()).filter(Boolean) })} />
           </Field>
-          <label className="switch"><span>Show posts marked sensitive</span><input type="checkbox" checked={sensitive} onChange={(e) => (setSensitive(e.target.checked), save('showSensitive', e.target.checked), bumpRecipe())} /></label>
+        </div>
+        <h2>Safety and languages</h2>
+        <div className="card stack">
+          <p className="small muted" style={{ margin: 0 }}>Sexual content involving minors is always blocked, and its authors with it. Spam and junk are always hidden.</p>
+          <label className="switch"><span>Show sexual or sensitive posts</span><input type="checkbox" checked={sensitive} onChange={(e) => (setSensitive(e.target.checked), save('showSensitive', e.target.checked), bumpRecipe())} /></label>
+          <Toggle setting="showOffensive" label="Show posts with slurs or threats" />
+          <Toggle setting="allLanguages" label="Show posts in all languages" />
+          <Toggle setting="unvetted" label="Include accounts outside the starting network" hint="Off by default: new and unknown accounts are where most spam and abuse comes from." />
+          <details className="small">
+            <summary>The starting network</summary>
+            <p className="muted">Until you follow people, strangers appear in For you only if one of these long-standing, widely followed Nostr
+              accounts follows them: {SEED_ACCOUNTS.map((s) => s.name).join(', ')}. Following people builds your own network.</p>
+          </details>
         </div>
         <h2>AI model</h2>
         <div className="card stack">
@@ -138,6 +152,22 @@ export function FeedSettings() {
         </div>
       </div>
     </>
+  );
+}
+
+function Toggle({ setting, label, hint }: { setting: 'showOffensive' | 'allLanguages' | 'unvetted'; label: string; hint?: string }) {
+  const { bumpRecipe } = useApp();
+  const [on, setOn] = useState(() => load(setting, false));
+  return (
+    <label className="switch">
+      <span>{label}{hint && <><br /><span className="tiny muted">{hint}</span></>}</span>
+      <input type="checkbox" checked={on} onChange={(e) => {
+        setOn(e.target.checked);
+        save(setting, e.target.checked);
+        if (setting === 'unvetted') resetNetwork();
+        bumpRecipe();
+      }} />
+    </label>
   );
 }
 

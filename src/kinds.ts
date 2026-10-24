@@ -10,10 +10,17 @@ export const KIND = {
   tokenRequest: 3476,
   tokenIssue: 3477,
   answer: 3478,
+  review: 3479,
+  credential: 3480,
+  comment: 1111,
+  reaction: 7,
+  report: 1984,
+  listing: 30402,
   supportPage: 13470,
   relayPayout: 13471,
   feedRecipe: 33475,
   mediaKit: 33476,
+  store: 33477,
   offer: 33470,
 } as const;
 

@@ -19,6 +19,8 @@ export const MEMO = {
   /** A donation to a relay operator for one of their relays. */
   relay: (url: string) => `fairground:relay:${normalizeRelayUrl(url)}`,
   relayPrefix: 'fairground:relay:',
+  /** A purchase; the order id commits to the buyer, so only they can later review it (see commerce.ts). */
+  order: (orderId: string) => `fairground:order:${orderId}`,
   /** A donation to Fairground's development. */
   development: 'fairground:development',
 } as const;

@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { RankedPost, Signal } from '@core/feed.ts';
+import type { Event } from 'nostr-tools/pure';
 import { PostCard } from '../components/PostCard.tsx';
+import { PostMenu } from '../components/PostMenu.tsx';
 import { Icon, Meter, Sheet, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
 import { currentRecipe, useFeed, type ModelStatus } from '../lib/feedEngine.ts';
@@ -41,6 +43,7 @@ export function Home() {
   const { account, recipeVersion, navigate } = useApp();
   const feed = useFeed(account, recipeVersion);
   const [why, setWhy] = useState<RankedPost>();
+  const [menu, setMenu] = useState<Event>();
   return (
     <>
       <TopBar title={<span className="brand"><img src="./icon.svg" alt="" width={28} height={28} />Fairground</span>}>
@@ -61,12 +64,13 @@ export function Home() {
         </div>
       )}
       {feed.posts.map((r) => (
-        <PostCard key={r.event.id} post={r.event} ranked={r} liked={feed.liked.has(r.event.id)} onReact={feed.react} onWhy={setWhy} />
+        <PostCard key={r.event.id} post={r.event} ranked={r} liked={feed.liked.has(r.event.id)} onReact={feed.react} onWhy={setWhy} onMenu={setMenu} />
       ))}
       {feed.ready && feed.posts.length > 0 && (
         <p className="center muted small" style={{ padding: 24 }}><Icon name="check" /> You’re caught up</p>
       )}
       {why && <WhySheet ranked={why} onClose={() => setWhy(undefined)} />}
+      {menu && <PostMenu post={menu} onLess={() => feed.react(menu, 'less')} onClose={() => setMenu(undefined)} onHidden={() => feed.refresh()} />}
     </>
   );
 }
