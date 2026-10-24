@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Onboarding } from './components/Onboarding.tsx';
+import { Aside, Sidebar } from './components/Shell.tsx';
 import { Icon } from './components/ui.tsx';
 import { AppContext, type AppState } from './context.ts';
 import { loadOrCreateAccount } from './lib/account.ts';
@@ -13,6 +14,8 @@ import { ListingDetail, Market, NewListing, StoreEditor, StorePage } from './scr
 import { ConversationThread, Conversations } from './screens/Messages.tsx';
 import { Orders } from './screens/Orders.tsx';
 import { PostDetail } from './screens/PostDetail.tsx';
+import { ListenScreen, MediaDetail, PhotosScreen, ShortsScreen, VideosScreen } from './screens/Media.tsx';
+import { Search } from './screens/Search.tsx';
 import { Create, MediaKitScreen, SupportPageScreen } from './screens/Create.tsx';
 import { Home } from './screens/Home.tsx';
 import { Profile } from './screens/Profile.tsx';
@@ -87,6 +90,12 @@ export function App() {
   let screen;
   if (path === '/') screen = <Home />;
   else if (path === '/post') screen = <Compose />;
+  else if (path === '/photos') screen = <PhotosScreen />;
+  else if (path === '/videos') screen = <VideosScreen />;
+  else if (path === '/shorts') screen = <ShortsScreen />;
+  else if (path === '/listen') screen = <ListenScreen />;
+  else if (path.startsWith('/media/') && /^[0-9a-f]{64}$/.test(path.slice(7))) screen = <MediaDetail key={path} id={path.slice(7)} />;
+  else if (path === '/search') screen = <Search query={query} />;
   else if (path === '/market') screen = <Market />;
   else if (path === '/market/new') screen = <NewListing query={query} />;
   else if (path.startsWith('/l/')) screen = <ListingDetail key={path} address={decodeURIComponent(path.slice(3))} />;
@@ -114,13 +123,16 @@ export function App() {
   else if (path.startsWith('/p/') && /^[0-9a-f]{64}$/.test(path.slice(3))) screen = <Profile key={path} pubkey={path.slice(3)} />;
   else screen = <Home />;
 
-  const tab = TABS.slice().reverse().find((t) => (t.path === '/' ? path === '/' : path.startsWith(t.path)))?.path
+  const wide = ['/videos', '/market', '/photos', '/search'].includes(path) || ['/media/', '/l/', '/s/'].some((p) => path.startsWith(p));
+  const tab = ['/photos', '/videos', '/shorts', '/listen'].includes(path) || path.startsWith('/media/') ? '/' : TABS.slice().reverse().find((t) => (t.path === '/' ? path === '/' : path.startsWith(t.path)))?.path
     ?? (['/feed', '/account', '/relays', '/supporting', '/about', '/orders', '/messages'].includes(path) || path.startsWith('/messages/') ? '/you'
       : path.startsWith('/promote') || path === '/relay' ? '/create'
         : path.startsWith('/l/') || path.startsWith('/s/') ? '/market' : '');
 
   return (
     <AppContext.Provider value={state}>
+      <div className={`layout${wide ? ' wide' : ''}${path === '/shorts' ? ' shorts-layout' : ''}${path.startsWith('/media/') ? ' no-aside' : ''}`}>
+      <Sidebar path={path} />
       <div className="app">
         <main>{screen}</main>
         <div className="tabbar">
@@ -133,6 +145,8 @@ export function App() {
           </nav>
         </div>
         {message && <div className="toast" role="status">{message}</div>}
+      </div>
+      <Aside />
       </div>
       {onboarding && <Onboarding onDone={() => (setOnboarding(false), setRecipeVersion((v) => v + 1))} />}
     </AppContext.Provider>

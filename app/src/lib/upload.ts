@@ -23,19 +23,29 @@ async function reencode(file: File, maxSide = 1600): Promise<Blob> {
   return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not process the photo.'))), 'image/jpeg', 0.85));
 }
 
-export async function uploadPhoto(account: Account, file: File): Promise<string> {
-  const blob = await reencode(file);
+export const uploadPhoto = async (account: Account, file: File): Promise<string> => uploadBlob(account, await reencode(file), 'image/jpeg');
+
+/** The free media servers take up to 20 MiB per file; bigger videos need a link from somewhere else. */
+export const MAX_UPLOAD = 20 * 1024 * 1024;
+
+/** Uploads a video or audio file as it is. */
+export async function uploadFile(account: Account, file: File): Promise<string> {
+  if (file.size > MAX_UPLOAD) throw new Error(`That file is ${(file.size / 1048576).toFixed(0)} MB; the free media servers take up to 20 MB. Paste a link to it instead.`);
+  return uploadBlob(account, file, file.type || 'application/octet-stream');
+}
+
+export async function uploadBlob(account: Account, blob: Blob, type: string): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   const hash = bytesToHex(sha256(bytes));
   const auth = finalizeEvent({
-    kind: 24242, created_at: Math.floor(Date.now() / 1000), content: 'Upload photo',
+    kind: 24242, created_at: Math.floor(Date.now() / 1000), content: 'Upload media',
     tags: [['t', 'upload'], ['x', hash], ['expiration', String(Math.floor(Date.now() / 1000) + 300)]],
   }, account.nostrKey);
   const header = `Nostr ${base64.encode(new TextEncoder().encode(JSON.stringify(auth)))}`;
   let lastError = 'No media server accepted the photo.';
   for (const server of load<string[]>('mediaServers', DEFAULT_MEDIA_SERVERS)) {
     try {
-      const res = await fetch(`${server}/upload`, { method: 'PUT', headers: { Authorization: header, 'Content-Type': 'image/jpeg' }, body: blob });
+      const res = await fetch(`${server}/upload`, { method: 'PUT', headers: { Authorization: header, 'Content-Type': type }, body: blob });
       if (!res.ok) {
         lastError = `${new URL(server).host} said ${res.status}${res.headers.get('x-reason') ? `: ${res.headers.get('x-reason')}` : ''}`;
         continue;

@@ -4,7 +4,9 @@
  */
 import { finalizeEvent, type Event } from 'nostr-tools/pure';
 import { reportTemplate, type ReportReason } from '@core/commerce.ts';
-import { assess, networkFrom, readerScripts, scriptOf, SEED_ACCOUNTS } from '@core/safety.ts';
+import { detectLanguage } from '@core/language.ts';
+import { assess, networkFrom, SEED_ACCOUNTS } from '@core/safety.ts';
+import { readerLangs } from './language.ts';
 import type { Account } from './account.ts';
 import { getProfile } from './hooks.ts';
 import { publish, query } from './net.ts';
@@ -73,8 +75,6 @@ function block(pubkey: string) {
   save('blocked', [...blocked].slice(-2000));
 }
 
-const scripts = readerScripts(typeof navigator === 'undefined' ? ['en'] : navigator.languages ?? [navigator.language]);
-
 /**
  * Whether a post may be shown at all. Sexual content involving minors blocks its author for good, whatever the
  * settings. `following` relaxes the bot rule for accounts the reader chose to follow.
@@ -90,7 +90,10 @@ export function allowed(ev: Event, settings: SafetySettings, following = false):
   if (verdict.hide === 'hate' && !settings.showOffensive) return false;
   if (verdict.hide === 'spam' || verdict.hide === 'junk') return false;
   if (verdict.hide === 'bot' && !following) return false;
-  if (!settings.allLanguages && !following && !scripts.has(scriptOf(ev.content))) return false;
+  if (!settings.allLanguages && !following) {
+    const lang = detectLanguage(ev.content);
+    if (lang && !readerLangs().has(lang)) return false;
+  }
   return true;
 }
 

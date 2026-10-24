@@ -76,7 +76,18 @@ verified orders and ratings, weighted towards reviewers the reader trusts. Crede
 handler card, background check) show as verified by organisations the reader trusts, vouched by people they follow,
 or self-declared.
 
-**Reddit-style comments everywhere.** Posts and listings have threaded replies with up and down votes, Best, Top, New
+**Every format in one app.** Posts read like Twitter, Photos like Instagram, Videos like YouTube (a grid, then a
+watch page with what's next), Shorts like TikTok (full-screen, swipe, plays what's on screen) and Listen like a
+podcast app, with the Market alongside. They use the standard formats (NIP-68 pictures, NIP-71 videos, NIP-F4
+podcast episodes), and ordinary posts with a photo, video or audio link show in the matching format, so there's
+something to watch from the first day. Anyone can post in any format: photos are shrunk and stripped of location data
+on the device, and videos are uploaded with their length, size and a poster frame read on the device. On a computer
+the app has a sidebar, wide grids and a side column, rather than a stretched phone layout.
+
+**Search.** Hashtags work on every relay, and free text uses relays that support NIP-50 search. Results go through the
+same safety rules as the feed, and accounts from outside the reader's network need at least a named profile.
+
+**Reddit-style comments everywhere.** Posts, photos, videos, shorts, episodes and listings have threaded replies with up and down votes, Best, Top, New
 and Controversial sorting, and collapsible branches.
 
 **Safe by default.** Nostr relays carry everything anyone posts, so the app decides what to show:
@@ -87,8 +98,11 @@ and Controversial sorting, and collapsible branches.
   phone apps that's only possible on the web, as the app stores require.
 - Strangers reach the default feed only if long-standing, widely followed accounts follow them, which keeps new spam
   and abuse accounts out.
-- Slurs, threats, spam and bots are hidden, every post can be hidden or reported, and posts in languages the reader
-  doesn't read are left out.
+- Slurs, threats, spam and bots are hidden, and every post can be hidden or reported. Titles and image descriptions
+  are checked as well as the text.
+- Posts are in the reader's languages: their device's, plus any they keep reading, liking or writing in, detected on
+  the device. That keeps the start feeling like their own community rather than the whole world at once. Languages
+  can be added or removed in settings, or the filter turned off.
 
 **The commons loop.** After a payout, creators (and advertisers, after paying) can donate, opt-in, never pre-selected.
 They see exactly how it splits between development and relays, and which relays get it: the ones that actually served
@@ -149,6 +163,7 @@ npm run app:build         # static build in app/dist
 node tools/dev-relay.ts   # an empty local relay; open the app with ?relay=ws://localhost:7777
 node e2e/smoke.ts         # end-to-end test of the built app in Chrome, against labelled test fixtures
 node e2e/market.ts        # two people: comments, safety, buying, requests, offers and orders
+node e2e/media.ts         # photos, videos, shorts, listening, search, languages, and the desktop and phone layouts
 ```
 
 The app reads public relays by default. `?relay=` (repeatable) points it elsewhere, and a build with
@@ -194,7 +209,7 @@ Store releases need signing keys and developer accounts, which aren't part of th
 | `src/defaults.ts` | Default relays, index publisher and development address |
 | `app/` | The React app, its on-device model worker, and the Capacitor iOS and Android projects |
 | `tools/` | Dev relay and the CPI publisher |
-| `e2e/` | End-to-end smoke test, its test fixtures, and the demo-video recorder (real posts only) |
+| `e2e/` | End-to-end tests, their test fixtures and tiny generated test media, and the demo-video recorder (real posts only) |
 | `docs/protocol.md` | Event formats and verification rules |
 
 ## License

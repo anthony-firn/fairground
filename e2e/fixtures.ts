@@ -4,6 +4,7 @@
  */
 import { finalizeEvent, generateSecretKey, getPublicKey, type Event } from 'nostr-tools/pure';
 import { createListing, createStore } from '../src/commerce.ts';
+import { createEpisode, createPhotoPost, createVideo } from '../src/media.ts';
 import { createMediaKit } from '../src/mediakit.ts';
 import { createPqBinding, generatePqKeys } from '../src/pq.ts';
 import { FIXED_INDEX, parseUsd } from '../src/pricing.ts';
@@ -14,6 +15,9 @@ import { startDevRelay, type DevRelay } from '../tools/dev-relay.ts';
 
 const TOPICS = [['cooking', 'food'], ['gaming', 'games'], ['running', 'outdoors'], ['tech', 'technology'], ['art', 'art'], ['music', 'music']];
 const now = () => Math.floor(Date.now() / 1000);
+
+/** Test media is served from this origin by Playwright routing (see serveMedia in media.ts), from the files in e2e/media. */
+export const MEDIA = 'https://media.fairground.test';
 const month = () => new Date().toISOString().slice(0, 7);
 
 export async function startFixtureRelay(port: number): Promise<DevRelay & { creators: string[]; advertiser: string; shop: string }> {
@@ -39,6 +43,17 @@ export async function startFixtureRelay(port: number): Promise<DevRelay & { crea
     }
     return getPublicKey(key);
   });
+  // One of each media format, and a post in another language that an English reader shouldn't see by default.
+  const mediaKey = generateSecretKey();
+  store(finalizeEvent({ kind: 0, created_at: t - 86400, tags: [], content: JSON.stringify({ name: 'Test media creator' }) }, mediaKey));
+  store(createPhotoPost(mediaKey, { title: 'Test photo set', description: 'Test photos #art', images: [{ url: `${MEDIA}/photo1.jpg`, dim: '640x480' }, { url: `${MEDIA}/photo2.jpg` }], created_at: t - 1200 }));
+  store(finalizeEvent({ kind: 1, created_at: t - 1300, content: `Test post with a photo #art ${MEDIA}/photo3.jpg`, tags: [['t', 'art']] }, mediaKey));
+  store(createVideo(mediaKey, { short: false, title: 'Test video', description: 'Test video description #tech', url: `${MEDIA}/video.webm`, m: 'video/webm', poster: `${MEDIA}/poster.jpg`, duration: 4, dim: '640x360', created_at: t - 1400 }));
+  store(createVideo(mediaKey, { short: false, title: 'Test video two', description: 'Another test video', url: `${MEDIA}/video.webm`, m: 'video/webm', duration: 4, dim: '640x360', created_at: t - 1500 }));
+  store(createVideo(mediaKey, { short: true, title: 'Test short', description: 'Test short #music', url: `${MEDIA}/short.webm`, m: 'video/webm', duration: 4, dim: '360x640', created_at: t - 1600 }));
+  store(createEpisode(mediaKey, { title: 'Test episode 1', description: 'Test podcast episode', audio: `${MEDIA}/episode.ogg`, type: 'audio/ogg', image: `${MEDIA}/cover.jpg`, created_at: t - 1700 }));
+  store(finalizeEvent({ kind: 1, created_at: t - 1800, content: 'Publicación de prueba: el perro de mi vecino no para de ladrar por la noche', tags: [] }, mediaKey));
+
   const fans = Array.from({ length: 5 }, () => generateSecretKey());
   for (const fan of fans) for (const post of relay.events.filter((e) => e.kind === 1).slice(0, 4)) {
     store(finalizeEvent({ kind: 7, created_at: t - 60, content: '+', tags: [['e', post.id], ['p', post.pubkey]] }, fan));

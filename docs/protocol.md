@@ -333,10 +333,31 @@ The score is the weighted mean of the signals. It is halved for sponsored posts 
 
 ## Comments and votes
 
-Replies to kind-1 notes are kind-1 notes with NIP-10 `root` and `reply` markers. Comments on anything else are NIP-22
-kind-1111 comments, scoped by `A` (addressable roots, so edits keep their thread) or `E`. Votes are NIP-25 reactions
+Replies to kind-1 notes are kind-1 notes with NIP-10 `root` and `reply` markers. Comments on anything else (photos,
+videos, episodes, listings) are NIP-22 kind-1111 comments, scoped by `A` (addressable roots, so edits keep their thread) or `E`. Votes are NIP-25 reactions
 (`-` down, anything else up, empty withdraws), and only each voter's latest reaction counts. "Best" is the lower bound
 of the Wilson interval at 80% confidence, and "Controversial" is `(up + down) ^ (min/max)`.
+
+## Media
+
+Standard formats, so other Nostr apps' media appears too:
+
+| Format | Kinds | Media |
+| --- | --- | --- |
+| Photos | 20 (NIP-68) | one `imeta` per image: `url`, `m`, optional `dim` and `alt` |
+| Videos | 21, and addressable 34235 (NIP-71) | `imeta` with `url`, `m`, `image` (poster), `duration`, `dim` |
+| Shorts | 22, and addressable 34236 (NIP-71) | as videos |
+| Episodes | 54 (NIP-F4) | `["audio", url, type]`, optional `["image", url]` and `["description", …]` |
+
+Each also carries `title` and the hashtags in its text as `t` tags. Kind-1 notes are shown in a format too, by the
+first `https` link in their content: a video file makes a video, an audio file an episode (with an image link as its
+cover), and image files a photo post. Only `https` media is shown, and HLS (`.m3u8`) is not played yet. Safety rules
+read `title`, `summary`, `description` and `alt` (including `alt` inside `imeta`) along with the content.
+
+## Search
+
+Free text is sent as a NIP-50 `search` filter to relays that support it; hashtags use `#t` filters, which every relay
+supports. Clients apply the same safety rules to results as to the feed.
 
 ## Listings (NIP-99, kind 30402)
 

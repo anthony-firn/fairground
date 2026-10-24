@@ -22,7 +22,7 @@ const errors: string[] = [];
 const step = (name: string) => console.log(`- ${name}`);
 
 async function person(payTo: boolean): Promise<{ page: Page; pubkey: string }> {
-  const ctx = await browser.newContext();
+  const ctx = await browser.newContext({ viewport: { width: 420, height: 900 } });
   await ctx.addInitScript(([pay]) => {
     localStorage.setItem('fairground.model', JSON.stringify({ kind: 'off' }));
     if (pay) localStorage.setItem('fairground.payTo', JSON.stringify(pay));

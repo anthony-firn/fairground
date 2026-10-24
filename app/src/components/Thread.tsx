@@ -121,7 +121,7 @@ export function Thread({ root }: { root: Event }) {
   return (
     <section className="thread page" aria-label="Comments">
       <div className="row between">
-        <strong>{countComments(thread)} comments</strong>
+        <strong style={{ whiteSpace: 'nowrap' }}>{countComments(thread) === 1 ? '1 comment' : `${countComments(thread)} comments`}</strong>
         <Segmented value={sort} onChange={setSort} options={[['best', 'Best'], ['top', 'Top'], ['new', 'New'], ['controversial', 'Hot takes']]} />
       </div>
       <Composer placeholder="Add a comment" onSend={(t) => reply(root, t)} />

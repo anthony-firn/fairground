@@ -14,8 +14,16 @@
  */
 import type { Event } from 'nostr-tools/pure';
 
+/** What a post says: its content plus, for photos, videos and episodes, the title, summary and alt text in its tags. */
+const words = (ev: Event) => [
+  ev.content,
+  ...ev.tags.filter((t) => ['title', 'summary', 'description', 'alt'].includes(t[0])).map((t) => t[1] ?? ''),
+  ...ev.tags.filter((t) => t[0] === 'imeta').flatMap((t) => t.filter((e) => e.startsWith('alt ')).map((e) => e.slice(4))),
+].join(' ').trim();
+const mediaUrl = (ev: Event) => ev.tags.find((t) => t[0] === 'imeta')?.find((e) => e.startsWith('url ')) ?? ev.tags.find((t) => t[0] === 'audio')?.[1] ?? '';
+
 const text = (ev: Event) =>
-  `${ev.content} ${ev.tags.filter((t) => t[0] === 't').map((t) => `#${t[1]}`).join(' ')}`.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
+  `${words(ev)} ${ev.tags.filter((t) => t[0] === 't').map((t) => `#${t[1]}`).join(' ')}`.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
 
 const MINOR = /\b(teen(s|age|ager|agers)?|young(er)?|underage|minors?|child(ren)?|kids?|kiddies|pre-?teens?|infants?|babies|toddlers?|lolita|schoolgirls?|schoolboys?|schoolthot|pyt|(1[0-7]|[1-9]) ?(yo|y\/o|years? old))\b/;
 const SEXUAL = /\b(sex|sexy|nudes?|naked|porn\w*|xxx|nsfw|horny|blowjobs?|cum|dicks?|cocks?|pussy|tits?|boobs?|nipples?|lewd|rape\w*|cnc\w*|fetish\w*|onlyfans|explicit|erotic\w*|incest|bestiality|snapleak|nolimit|taboo|momson)\b/;
@@ -66,7 +74,7 @@ export function assess(ev: Event, profile?: { bot?: boolean }): Verdict {
   if (ev.tags.some((tag) => tag[0] === 'content-warning') || ADULT.test(t)) return { block: false, hide: 'sexual' };
   if (HATE.test(t)) return { block: false, hide: 'hate' };
   if (hashtagCount(ev) > 10) return { block: false, hide: 'spam' };
-  if (looksLikeJson(ev.content) || ev.content.trim().length < 2) return { block: false, hide: 'junk' };
+  if (looksLikeJson(ev.content) || words(ev).length < 2) return { block: false, hide: 'junk' };
   if (profile?.bot) return { block: false, hide: 'bot' };
   return { block: false };
 }
@@ -116,7 +124,7 @@ export function repeats(events: Event[]): Set<string> {
   const seen = new Set<string>();
   const out = new Set<string>();
   for (const ev of [...events].sort((a, b) => b.created_at - a.created_at)) {
-    const key = `${ev.pubkey}:${ev.content.toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 200)}`;
+    const key = `${ev.pubkey}:${mediaUrl(ev)}:${words(ev).toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').slice(0, 200)}`;
     if (seen.has(key)) out.add(ev.id);
     else seen.add(key);
   }

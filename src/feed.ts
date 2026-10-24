@@ -14,6 +14,9 @@ import { KIND } from './kinds.ts';
 import { now } from './tags.ts';
 import { hasDisclosure } from './sponsorship.ts';
 
+/** Notes and the media formats (NIP-68 photos, NIP-71 videos and shorts, NIP-F4 episodes). */
+const RANKED_KINDS = new Set([1, 20, 21, 22, 54, 34235, 34236]);
+
 export type Signal = 'recency' | 'trust' | 'engagement' | 'topic' | 'similarity';
 const SIGNALS: Signal[] = ['recency', 'trust', 'engagement', 'topic', 'similarity'];
 
@@ -195,7 +198,7 @@ function signals(ev: Event, recipe: FeedRecipe, ctx: ReaderContext): Record<Sign
 }
 
 function isCandidate(ev: Event, recipe: FeedRecipe, ctx: ReaderContext): boolean {
-  if (ev.kind !== KIND.note || ctx.muted.has(ev.pubkey)) return false;
+  if (!RANKED_KINDS.has(ev.kind) || ctx.muted.has(ev.pubkey)) return false;
   const text = ev.content.toLowerCase();
   if (recipe.mutedWords.some((w) => w && text.includes(w))) return false;
   if (recipe.sponsored === 'hide' && isSponsored(ev)) return false;

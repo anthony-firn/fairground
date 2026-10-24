@@ -14,6 +14,8 @@ export * from './comments.ts';
 export * from './commerce.ts';
 export * from './geohash.ts';
 export * from './safety.ts';
+export * from './media.ts';
+export * from './language.ts';
 export * from './defaults.ts';
 export * from './reputation.ts';
 export * from './rails/rail.ts';

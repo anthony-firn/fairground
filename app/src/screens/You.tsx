@@ -16,6 +16,7 @@ import { nowSeconds, shortKey, usd } from '../lib/format.ts';
 import { useEvents } from '../lib/hooks.ts';
 import { modelChoice, type ModelChoice } from '../lib/model.ts';
 import { pool, publish, query, relays, setRelays } from '../lib/net.ts';
+import { isBrowserLanguage, languageName, readerLangs, resetLearnedLanguages, setExtraLanguage } from '../lib/language.ts';
 import { passkeysSupported } from '../lib/passkey.ts';
 import { load, save } from '../lib/storage.ts';
 import { createAccountVault, requirePasskey, session, signOutEverywhereLocal } from '../lib/vaultSync.ts';
@@ -115,6 +116,7 @@ export function FeedSettings() {
         <div className="card stack">
           <SafeSearch on={!sensitive} onChange={(on) => (setSensitive(!on), save('showSensitive', !on), bumpRecipe())} />
           <Toggle setting="showOffensive" label="Show posts with slurs or threats" />
+          <Languages />
           <Toggle setting="allLanguages" label="Show posts in all languages" />
           <Toggle setting="unvetted" label="Include accounts outside the starting network" hint="Off by default: new and unknown accounts are where most spam and abuse comes from." />
           <details className="small">
@@ -185,6 +187,33 @@ function SafeSearch({ on, onChange }: { on: boolean; onChange: (on: boolean) => 
         </Sheet>
       )}
     </>
+  );
+}
+
+/** Languages the feed and search show: the device's, plus ones learned from what the reader reads and writes. */
+const COMMON_LANGUAGES = ['en', 'es', 'pt', 'fr', 'de', 'it', 'nl', 'sv', 'pl', 'cs', 'tr', 'id', 'vi', 'ru', 'uk', 'ar', 'he', 'hi', 'th', 'ja', 'ko', 'zh'];
+
+function Languages() {
+  const { bumpRecipe } = useApp();
+  const [langs, setLangs] = useState(() => [...readerLangs()]);
+  const refresh = () => (setLangs([...readerLangs()]), bumpRecipe());
+  return (
+    <div className="stack">
+      <span>Languages<br /><span className="tiny muted">Posts in these languages, so it feels local from the start. Ones you keep reading or writing in are added automatically.</span></span>
+      <div className="chips">
+        {langs.map((l) => (
+          <button key={l} type="button" className="chip on" disabled={isBrowserLanguage(l)} title={isBrowserLanguage(l) ? 'Your device language' : 'Remove'}
+            onClick={() => (setExtraLanguage(l, false), refresh())}>
+            {languageName(l)}{isBrowserLanguage(l) ? '' : ' ×'}
+          </button>
+        ))}
+        <select aria-label="Add a language" value="" onChange={(e) => e.target.value && (setExtraLanguage(e.target.value, true), refresh())}>
+          <option value="">Add…</option>
+          {COMMON_LANGUAGES.filter((l) => !langs.includes(l)).map((l) => <option key={l} value={l}>{languageName(l)}</option>)}
+        </select>
+      </div>
+      <button type="button" className="btn ghost small" onClick={() => (resetLearnedLanguages(), refresh())}>Forget learned languages</button>
+    </div>
   );
 }
 

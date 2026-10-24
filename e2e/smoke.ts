@@ -23,7 +23,7 @@ const eventsOf = (kind: number, pubkey?: string) => relay.events.filter((e) => e
 const step = (name: string) => console.log(`- ${name}`);
 
 try {
-  const a = await browser.newContext();
+  const a = await browser.newContext({ viewport: { width: 420, height: 900 } });
   const page = await a.newPage();
   watch(page);
   await page.goto(url);
@@ -53,8 +53,8 @@ try {
   assert.equal(eventsOf(7, me).length, 1);
 
   step('posting');
-  await page.getByRole('link', { name: 'Post' }).click();
-  await page.getByPlaceholder(/What’s happening/).fill('Hello from the smoke test #testing');
+  await page.getByRole('link', { name: 'Post', exact: true }).click();
+  await page.getByLabel('What’s happening?').fill('Hello from the smoke test #testing');
   await page.getByRole('button', { name: 'Post', exact: true }).click();
   await page.getByText('Hello from the smoke test').first().waitFor();
   assert.ok(eventsOf(1, me).some((e) => e.tags.some((t) => t[0] === 't' && t[1] === 'testing')));
@@ -95,7 +95,7 @@ try {
   assert.equal(relay.events.filter((e) => e.kind === 30078).length, 1);
 
   step('signing in on a second device restores the same account');
-  const b = await browser.newContext();
+  const b = await browser.newContext({ viewport: { width: 420, height: 900 } });
   const other = await b.newPage();
   watch(other);
   await other.goto(url);

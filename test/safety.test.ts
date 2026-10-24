@@ -71,3 +71,14 @@ test('bestiality and non-consensual intimate imagery are blocked like child abus
   assert.deepEqual(assess(post('new nsfw set, adults only')), { block: false, hide: 'sexual' });
   assert.deepEqual(assess(post('deepfake nudes of a celebrity')), { block: true });
 });
+
+test('photos, videos and episodes are judged by their titles and alt text too', () => {
+  const video = (title: string, content = '', url = 'https://x.example/v.mp4') =>
+    finalizeEvent({ kind: 21, created_at: 1, content, tags: [['title', title], ['imeta', `url ${url}`, 'm video/mp4']] }, key);
+  assert.deepEqual(assess(video('Build log, part 1')), { block: false }, 'a title with no description is not junk');
+  assert.deepEqual(assess(video('teen nudes t.me/x')), { block: true }, 'abuse in a title is blocked');
+  assert.deepEqual(assess(video('new nsfw set')), { block: false, hide: 'sexual' });
+  const alt = finalizeEvent({ kind: 20, created_at: 1, content: '', tags: [['title', 'Set'], ['imeta', 'url https://x.example/a.jpg', 'alt nsfw shoot']] }, key);
+  assert.deepEqual(assess(alt), { block: false, hide: 'sexual' });
+  assert.equal(repeats([video('Clip', '', 'https://x.example/1.mp4'), video('Clip', '', 'https://x.example/2.mp4')]).size, 0, 'different videos with one title are not repeats');
+});

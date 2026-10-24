@@ -7,6 +7,7 @@ import { Icon, Meter, Sheet, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
 import { currentRecipe, useFeed, type ModelStatus } from '../lib/feedEngine.ts';
 import { SurveyPrompts } from './Survey.tsx';
+import { FormatBar } from './Media.tsx';
 
 const SIGNAL_LABELS: Record<Signal, string> = {
   recency: 'Posted recently',
@@ -46,9 +47,11 @@ export function Home() {
   const [menu, setMenu] = useState<Event>();
   return (
     <>
-      <TopBar title={<span className="brand"><img src="./icon.svg" alt="" width={28} height={28} />Fairground</span>}>
+      <TopBar title={<><span className="brand mobile-only"><img src="./icon.svg" alt="" width={28} height={28} />Fairground</span><span className="desktop-only">Home</span></>}>
+        <button type="button" className="icon-btn" onClick={() => navigate('/search')} aria-label="Search"><Icon name="search" /></button>
         <button type="button" className="btn small" onClick={() => navigate('/feed')}>{currentRecipe().name}</button>
       </TopBar>
+      <FormatBar current="/" />
       <ModelLine status={feed.model} />
       {feed.newCount > 0 && (
         <button type="button" className="pill" onClick={() => (feed.refresh(), window.scrollTo({ top: 0 }))}>

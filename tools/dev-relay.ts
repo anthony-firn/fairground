@@ -6,7 +6,7 @@
  */
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { matchFilter, matchFilters, type Filter } from 'nostr-tools/filter';
+import { matchFilter, type Filter } from 'nostr-tools/filter';
 import { verifyEvent, type Event } from 'nostr-tools/pure';
 import { WebSocketServer, type WebSocket } from 'ws';
 
@@ -14,6 +14,14 @@ const isReplaceable = (k: number) => k === 0 || k === 3 || (k >= 10000 && k < 20
 const isAddressable = (k: number) => k >= 30000 && k < 40000;
 const isEphemeral = (k: number) => k >= 20000 && k < 30000;
 const dTag = (e: Event) => e.tags.find((t) => t[0] === 'd')?.[1] ?? '';
+
+/** NIP-50, simply: every word of the search appears in the content or title. */
+function searched(f: Filter, e: Event): boolean {
+  if (!f.search) return true;
+  const text = `${e.content} ${e.tags.filter((t) => t[0] === 'title').map((t) => t[1]).join(' ')}`.toLowerCase();
+  return f.search.toLowerCase().split(/\s+/).filter(Boolean).every((w) => text.includes(w));
+}
+const matches = (f: Filter, e: Event) => matchFilter(f, e) && searched(f, e);
 
 export interface DevRelay {
   url: string;
@@ -28,7 +36,7 @@ export function startDevRelay(port = 7777, info: { pubkey?: string } = {}): Prom
   const http = createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/nostr+json');
-    res.end(JSON.stringify({ name: 'Fairground dev relay', pubkey: info.pubkey, supported_nips: [1, 11] }));
+    res.end(JSON.stringify({ name: 'Fairground dev relay', pubkey: info.pubkey, supported_nips: [1, 11, 50] }));
   });
   const wss = new WebSocketServer({ server: http });
 
@@ -65,14 +73,14 @@ export function startDevRelay(port = 7777, info: { pubkey?: string } = {}): Prom
         if (!store(ev)) return send(['OK', ev.id, false, 'invalid: a newer version exists']);
         send(['OK', ev.id, true, '']);
         for (const [client, clientSubs] of subscriptions) {
-          for (const [id, filters] of clientSubs) if (matchFilters(filters, ev)) client.send(JSON.stringify(['EVENT', id, ev]));
+          for (const [id, filters] of clientSubs) if (filters.some((f) => matches(f, ev))) client.send(JSON.stringify(['EVENT', id, ev]));
         }
       } else if (msg[0] === 'REQ') {
         const [, id, ...filters] = msg as [string, string, ...Filter[]];
         subs.set(id, filters);
         const sent = new Set<string>();
         for (const f of filters) {
-          const matched = events.filter((e) => matchFilter(f, e)).sort((a, b) => b.created_at - a.created_at);
+          const matched = events.filter((e) => matches(f, e)).sort((a, b) => b.created_at - a.created_at);
           for (const e of f.limit === undefined ? matched : matched.slice(0, f.limit)) {
             if (!sent.has(e.id)) sent.add(e.id) && send(['EVENT', id, e]);
           }

@@ -24,6 +24,7 @@ import { rememberProfile } from './hooks.ts';
 import { currentEmbedder } from './model.ts';
 import { repeats } from '@core/safety.ts';
 import { allowed, loadNetwork, safetySettings } from './safety.ts';
+import { learnLanguage } from './language.ts';
 import { markSeen, publish, query, subscribe, subscribeAttributed } from './net.ts';
 import { load, save } from './storage.ts';
 
@@ -192,7 +193,9 @@ export function useFeed(account: Account, recipeVersion: number): Feed {
       markSeen(post.id);
       if (readOnce.current.has(post.id)) return;
       readOnce.current.add(post.id);
+      learnLanguage(post.content, 1);
     }
+    if (reaction === 'like') learnLanguage(post.content, 2);
     const vector = embeddings.current.get(post.id);
     if (vector) save('interests', [...learn(interests(), vector, reaction)]);
     if (reaction === 'less') {
