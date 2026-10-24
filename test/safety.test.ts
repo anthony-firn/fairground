@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { assess, isChildAbuse, isIllegal, networkFrom, readerScripts, repeats, scriptOf } from '../src/safety.ts';
+import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
+import { assess, isChildAbuse, isIllegal, readerScripts, repeats, scriptOf } from '../src/safety.ts';
 
 const key = generateSecretKey();
 const post = (content: string, tags: string[][] = [], at = 1_790_000_000) => finalizeEvent({ kind: 1, created_at: at, content, tags }, key);
@@ -52,15 +52,6 @@ test('a bot repeating itself shows once', () => {
   const b = post('Block #972882 — no winner', [], 200);
   const c = post('Something else', [], 150);
   assert.deepEqual([...repeats([a, b, c])], [a.id]);
-});
-
-test('the starting network is the seeds and everyone they follow', () => {
-  const seedKey = generateSecretKey();
-  const seed = getPublicKey(seedKey);
-  const followed = getPublicKey(generateSecretKey());
-  const list = finalizeEvent({ kind: 3, created_at: 1, content: '', tags: [['p', followed], ['p', 'not-a-key']] }, seedKey);
-  const stranger = finalizeEvent({ kind: 3, created_at: 1, content: '', tags: [['p', 'f'.repeat(64)]] }, key);
-  assert.deepEqual([...networkFrom([list, stranger], [seed])].sort(), [seed, followed].sort());
 });
 
 test('bestiality and non-consensual intimate imagery are blocked like child abuse; legal adult content is only hidden', () => {

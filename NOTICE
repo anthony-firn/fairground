@@ -1,0 +1,10 @@
+Fairground
+Copyright 2026 Anthony Firn. Licensed under the Apache License, Version 2.0.
+
+Third-party software in the app:
+
+- LAME MP3 encoder, through @breezystack/lamejs (https://github.com/breezystack/lamejs), licensed under the GNU
+  Lesser General Public License 3.0. It is loaded as its own unmodified file, only when a recording is converted to
+  MP3. LAME: https://lame.sourceforge.io
+- hls.js (https://github.com/video-dev/hls.js), Apache License 2.0.
+- Other dependencies and their licences are listed in package.json and app/package.json.

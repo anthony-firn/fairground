@@ -4,8 +4,12 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { finalizeEvent, type Event } from 'nostr-tools/pure';
-import { formatDuration, toMedia, type MediaItem } from '@core/media.ts';
+import { formatDuration, HLS, toMedia, type MediaItem } from '@core/media.ts';
+import { parseShow, type Show } from '@core/podcast.ts';
+import { KIND } from '@core/kinds.ts';
 import { Content } from '../components/Content.tsx';
+import { MediaPlayer } from '../components/MediaPlayer.tsx';
+import { useAdBreaks } from '../lib/ads.ts';
 import { PostMenu } from '../components/PostMenu.tsx';
 import { Thread } from '../components/Thread.tsx';
 import { Avatar, Icon, Name, Sheet, TopBar } from '../components/ui.tsx';
@@ -15,6 +19,7 @@ import { useMediaFeed } from '../lib/mediaFeed.ts';
 import { publish, query } from '../lib/net.ts';
 import { allowed, safetySettings } from '../lib/safety.ts';
 import { learnLanguage } from '../lib/language.ts';
+import { ShowShelf, showPath } from './Podcast.tsx';
 
 export const FORMATS = [
   { path: '/', label: 'Posts', icon: 'home' },
@@ -130,8 +135,8 @@ function VideoThumb({ m }: { m: MediaItem }) {
   return (
     <span ref={ref} className="video-thumb" onMouseEnter={() => video.current?.play().catch(() => undefined)} onMouseLeave={() => video.current?.pause()}>
       <span className="thumb-ph" aria-hidden="true"><Icon name="play" /></span>
-      {near && (poster
-        ? <img src={poster} alt="" referrerPolicy="no-referrer" className={shown ? 'on' : ''} onLoad={() => setShown(true)} onError={() => setPosterFailed(true)} />
+      {near && (poster || HLS.test(m.video!.url)
+        ? poster && <img src={poster} alt="" referrerPolicy="no-referrer" className={shown ? 'on' : ''} onLoad={() => setShown(true)} onError={() => setPosterFailed(true)} />
         : <video ref={video} src={`${m.video!.url}#t=0.5`} preload="metadata" muted playsInline loop className={shown ? 'on' : ''} onLoadedData={() => setShown(true)} />)}
       {duration && <span className="duration">{duration}</span>}
     </span>
@@ -234,8 +239,10 @@ export function ListenScreen() {
       <TopBar title="Listen" />
       <FormatBar current="/listen" />
       <div className="page">
+        <ShowShelf />
+        <h2>Latest</h2>
         {!ready && <div className="skeleton" />}
-        {ready && !items.length && <Empty what="podcasts or music" />}
+        {ready && !items.length && <Empty what="episodes or music" />}
         {items.map((m) => (
           <button key={m.event.id} type="button" className="card row episode" onClick={() => navigate(mediaPath(m.event.id))}>
             {m.images[0] ? <img src={m.images[0]} alt="" width={72} height={72} loading="lazy" referrerPolicy="no-referrer" /> : <span className="episode-art" aria-hidden="true">🎧</span>}
@@ -258,12 +265,19 @@ export function MediaDetail({ id }: { id: string }) {
   const [menu, setMenu] = useState(false);
   const { liked, like } = useLike();
   const next = useMediaFeed('video', recipeVersion);
+  const [show, setShow] = useState<Show>();
   useEffect(() => {
     query({ ids: [id] }, 4000).then(([ev]) => {
       const ok = ev && allowed(ev, { ...safetySettings(), allLanguages: true }, true);
       setItem(ok ? toMedia(ev) ?? null : null);
+      const [, kind, author, d] = /^(\d+):([0-9a-f]{64}):(.+)$/.exec(ev?.kind === 54 ? ev.tags.find((t) => t[0] === 'a')?.[1] ?? '' : '') ?? [];
+      if (kind === String(KIND.show) && author === ev.pubkey) {
+        query({ kinds: [KIND.show], authors: [author], '#d': [d] }, 4000).then((list) => setShow(list.map(parseShow).filter((x): x is Show => !!x)[0]), () => undefined);
+      }
     }, () => setItem(null));
   }, [id]);
+  const playable = !item ? undefined : item.kind === 'video' || item.kind === 'short' ? 'video' : item.kind === 'audio' ? 'audio' : undefined;
+  const breaks = useAdBreaks(item?.event, item?.kind === 'short' ? undefined : playable, item?.video?.duration ?? item?.audio?.duration);
   if (item === undefined) return <><TopBar title="" back={() => history.back()} /><div className="skeleton" /></>;
   if (item === null) return <><TopBar title="" back={() => history.back()} /><p className="page muted">This isn’t available.</p></>;
   const ev = item.event;
@@ -274,12 +288,13 @@ export function MediaDetail({ id }: { id: string }) {
       </TopBar>
       <div className="watch">
         <div className="watch-main">
-          {(item.kind === 'video' || item.kind === 'short') && <video className="player" src={item.video!.url} poster={item.video!.poster} controls autoPlay playsInline />}
+          {(item.kind === 'video' || item.kind === 'short') && <MediaPlayer kind="video" src={item.video!.url} hls={item.video!.hls} poster={item.video!.poster} breaks={breaks} autoPlay label={titleOf(item)} />}
           {item.kind === 'photo' && <div className="photos">{item.images.map((src) => <img key={src} src={src} alt="" referrerPolicy="no-referrer" />)}</div>}
           {item.kind === 'audio' && (
             <div className="card stack center">
-              {item.images[0] && <img src={item.images[0]} alt="" style={{ width: 220, height: 220, objectFit: 'cover', borderRadius: 16, margin: '0 auto' }} referrerPolicy="no-referrer" />}
-              <audio src={item.audio!.url} controls preload="metadata" style={{ width: '100%' }} />
+              {(item.images[0] ?? show?.image) && <img src={item.images[0] ?? show?.image} alt="" style={{ width: 220, height: 220, objectFit: 'cover', borderRadius: 16, margin: '0 auto' }} referrerPolicy="no-referrer" />}
+              {show && <button type="button" className="btn ghost small" style={{ justifySelf: 'center' }} onClick={() => navigate(showPath(show.creator, show.slug))}>{show.title}</button>}
+              <MediaPlayer kind="audio" src={item.audio!.url} hls={item.audio!.hls} breaks={breaks} label={titleOf(item)} />
             </div>
           )}
           <div className="page" style={{ gap: 10 }}>

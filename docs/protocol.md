@@ -1,7 +1,8 @@
 # Fairground protocol (draft)
 
-Fairground adds direct sponsorships to Nostr. Everything here is an ordinary [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md)
-event, so any relay stores it and any client can read it. The kind numbers are provisional and unregistered; none
+Fairground is its own network built on Nostr's event format: everything here is an ordinary
+[NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) event, so any relay stores it, but Fairground clients
+show only Fairground members (see Membership). The kind numbers are provisional and unregistered; none
 collide with the [NIP registry](https://github.com/nostr-protocol/nips#event-kinds) as of October 2026.
 
 | Kind | Event | Signed by |
@@ -22,6 +23,11 @@ collide with the [NIP registry](https://github.com/nostr-protocol/nips#event-kin
 | 33475 | Feed recipe (addressable) | Recipe author |
 | 33476 | Media kit (addressable, `d` = `media-kit`) | Creator (hybrid) |
 | 30078 | Sign-in vault (NIP-78 app data, `d` = `fairground/vault`) | Key derived from username and password |
+| 33478 | Podcast show (addressable) | Creator |
+| 54 | Podcast episode (NIP-F4, extended) | Creator |
+| 33479 | Ad campaign (addressable) | Advertiser |
+| 33480 | Ad placement (addressable, `d` = acceptance id) | Creator (hybrid optional) |
+| 3481 | Read approval | Advertiser (hybrid) |
 
 Amounts are decimal strings of integer micro-dollars (`500000000` is $500). Periods are `YYYY-MM`. Times are Unix seconds.
 
@@ -156,11 +162,12 @@ Relay URLs are normalized to a lowercase host without a trailing slash.
 ## Donation receipt (3473)
 
 ```
-tags: [["e", <payment receipt id>, "", "payment"], ["tx", <rail id>, <transaction id>, <micro-dollars>, <recipient>]...]
+tags: [["e", <payment receipt id>, "", "payment"]?, ["tx", <rail id>, <transaction id>, <micro-dollars>, <recipient>]...]
 ```
 
-`recipient` is `development` or the relay URL whose operator was paid. This event is optional. Clients may suggest a
-donation only after a verified payment. They must show the split between development and relays and which relays
+`recipient` is `development` or the relay URL whose operator was paid. This event is optional, and so is the `e` tag:
+anyone may donate at any time. Clients may suggest a donation only after money changes hands (a verified payout, a
+payment made, a paid order). They must show the split between development and relays and which relays
 receive it, never pre-select it, and never take it from the payment it follows.
 
 ## Relay payout (13471)
@@ -190,10 +197,11 @@ operator's own creator account or own address doesn't count.
 ```
 content: what the creator makes
 tags: [["d", "media-kit"], ["price", <micro-dollars>, "USD", <index id>, <base period>], ["t", <topic>]...,
-       ["e", <survey id>, "", "survey"]?]
+       ["e", <survey id>, "", "survey"]?, ["format", "post" | "podcast" | "video"]..., ["audience", <per episode>]?,
+       ["cpm", <micro-dollars per thousand>]?]
 ```
 
-The price is the creator's rate per sponsored post. Advertisers' records are computed from public acceptances,
+The price is the creator's rate per sponsored post; `cpm` prices host-reads by the audience the creator reports. Advertisers' records are computed from public acceptances,
 sponsored posts and receipts.
 
 ## Sign-in vault (30078)
@@ -356,8 +364,95 @@ read `title`, `summary`, `description` and `alt` (including `alt` inside `imeta`
 
 ## Search
 
-Free text is sent as a NIP-50 `search` filter to relays that support it; hashtags use `#t` filters, which every relay
-supports. Clients apply the same safety rules to results as to the feed.
+Search covers members only: hashtags use `#t` filters with the members as `authors`; free text is matched on the device
+against members' recent events. Clients apply the same safety rules to results as to the feed. Relays that support
+NIP-50 may be used too, with the same `authors` restriction.
+
+## Membership
+
+Fairground is its own network. An account is a member when it has published a key binding (3470) with an ML-DSA-65
+key; clients show content only from members. Relays are storage: a client fetches the bindings to know who is on
+Fairground, and checks unknown authors' bindings when it meets them.
+
+## Podcasts
+
+### Show (33478)
+
+Addressable, signed with Nostr only. `content` is the description.
+
+- `["d", <slug>]`, `["title", …]`, `["image", <square artwork, 1400–3000 px, .jpg or .png>]`, `["author", …]`
+- `["category", <Apple category>, <subcategory>?]`, `["explicit", "true" | "false"]`, `["language", <ISO 639>]`
+- `["type", "episodic" | "serial"]`, `["guid", <podcast:guid>]`: UUID v5 of the first feed URL, kept if the show moves
+- Optional: `["owner", <name>, <email>]`, `["r", <website>]`, `["copyright", …]`
+
+### Episode (NIP-F4 kind 54, extended)
+
+- `["a", "33478:<pubkey>:<slug>"]`: the show; it must be the author's own.
+- `["guid", <uuid>]`: stays the same across edits; the newest event with a GUID is the episode.
+- `["audio", <url>, <mime>]`, `["size", <bytes>]`, `["duration", <seconds>]`, `["title", …]`, `["description", …]`
+- Optional: `["episode", n]`, `["season", n]`, `["episode_type", "trailer" | "bonus"]`, `["explicit", "true"]`,
+  `["image", url]`, `["hls", url]`, `["transcript", url, mime]`
+- `["mp3", <version>, <sample rate>, <channels>, <id3 end>, <audio start>, <audio end>]`: the file's MP3 layout.
+- `["break", <seconds>, <byte offset>?]`: a mid-roll point; the offset is the MP3 frame boundary at that time.
+
+### RSS
+
+A gateway renders RSS 2.0 with the `itunes` and `podcast` namespaces: `itunes:image`, `itunes:category`,
+`itunes:explicit`, `itunes:owner`, `podcast:guid`, `podcast:locked` (when there is an owner email), and per item a
+non-permalink `guid`, an `enclosure` with length and type, `itunes:duration`, episode and season numbers, and HLS as
+`podcast:alternateEnclosure`. Enclosures point at the gateway, which redirects to the file or streams a stitched copy.
+
+## Host-read ads
+
+### Campaign (33479)
+
+The advertiser's plan, signed with Nostr only (offers made from it are the contracts). `content` is a free-text brief.
+`["d"]`, `["title"]`, `["objective", "awareness" | "consideration" | "conversions"]`, `["product"]`, `["offer"]`,
+`["r", <landing page>]`, `["code", <promo base>]`, `["flight", <start>, <end>]`, `["budget", <micros>]`,
+`["cpm", <micros>]`, and lists of `point`, `avoid`, `format`, `media`, `slot`, `t`, `region`, `language`, `exclude`;
+`["approval", "read"]` when the advertiser approves reads.
+
+### Offer terms
+
+An offer (33470) may carry `["format", "post" | "host-read"]`, `media`, `slot`, `["flight", start, end]`, `point`,
+`avoid`, `["r", <tracked link>]`, `["code", <this creator's promo code>]`, `["approval", "read"]` and
+`["a", <campaign address>]`. The acceptance embeds the offer, so the terms are fixed with it.
+
+### Placement (33480)
+
+The creator's delivery for a host-read deal, replaceable per deal (`d` is the acceptance id); hybrid-signed when the
+creator has a post-quantum key. `content` is the script.
+
+- `["e", <acceptance>, "", "sponsorship"]`, `["p", <advertiser>]`, `["flight", <start>, <end>]`, `["label", …]`
+  (must disclose the sponsorship), one or more `["slot", "pre" | "mid" | "post"]`
+- `["spot", <url>, <mime>, <seconds>, <version>?, <sample rate>?, <channels>?, <audio start>?, <audio end>?]`: the
+  recording; the MP3 fields let gateways splice it in.
+- `["a", <show>]` to restrict it to shows (all shows when absent), `["scope", "video"]` to include videos,
+  `["r", <link>]`, `["code", <promo code>]`, `["t", "ad"]`
+
+It counts as the deal's delivery when it is by the creator, references the acceptance, names the advertiser, was
+published between acceptance and deadline, stays within the offer's flight (a day's grace either side) and uses only the
+offer's slots. The payment receipt's `delivery` is the placement version that was paid for.
+
+### Approval (3481)
+
+The advertiser's verdict on one exact placement version, hybrid-signed: `["e", <placement id>, "", "placement"]`,
+`["a", <placement address>]`, `["p", <creator>]`, `["status", "approved" | "changes"]`, `content` the note. The newest
+verdict counts; re-recording needs a new approval.
+
+### Playing ads
+
+A placement plays while now is inside its flight, its acceptance exists (by the creator, embedding an offer from the
+advertiser), and, if the offer asks for approval, the advertiser approved this version and hasn't since asked for
+changes. Pre-rolls play at the start, mid-rolls at the episode's break marks, post-rolls at the end, at most three per
+break, earliest flight first. Audio reads play in episodes; video reads (or audio over a card) in videos when the
+placement includes them. Players label each ad with the placement's label and let listeners skip.
+
+A gateway stitches MP3 downloads as: the episode's ID3 tag, pre-roll reads, the episode's audio frames split at each
+break's byte offset with the reads between, then post-roll reads. Xing/Info header frames are left out. Reads whose
+MPEG version, sample rate or channels differ from the episode's are skipped. Downloads with nothing to insert redirect
+to the file.
+
 
 ## Listings (NIP-99, kind 30402)
 

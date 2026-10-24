@@ -47,7 +47,8 @@ import { nowSeconds, usd } from '../lib/format.ts';
 import { currentArea } from '../lib/geo.ts';
 import { useEvents } from '../lib/hooks.ts';
 import { publish, query } from '../lib/net.ts';
-import { allowed, loadNetwork, safetySettings } from '../lib/safety.ts';
+import { allowed, safetySettings } from '../lib/safety.ts';
+import { loadMembers, useMembership } from '../lib/members.ts';
 import { load, save } from '../lib/storage.ts';
 import { uploadPhoto } from '../lib/upload.ts';
 import { PayoutSheet } from './Create.tsx';
@@ -86,13 +87,14 @@ export function Market() {
   }, [area]);
   const { events, loading } = useEvents(filter);
   const stores = useEvents(area ? { kinds: [KIND.store], '#g': [area.slice(0, 4)], limit: 30 } : null);
+  const members = useMembership([...events, ...stores.events].map((e) => e.pubkey));
 
   const listings = useMemo(() => {
     const q = search.trim().toLowerCase();
     const newest = new Map<string, Listing>();
     for (const ev of events) {
       const l = parseListing(ev);
-      if (!l || l.status !== 'active' || !safeListing(l)) continue;
+      if (!l || l.status !== 'active' || !members?.has(l.event.pubkey) || !safeListing(l)) continue;
       const prev = newest.get(l.address);
       if (!prev || prev.event.created_at < ev.created_at) newest.set(l.address, l);
     }
@@ -101,7 +103,7 @@ export function Market() {
       (!service || l.categories.includes(service)) &&
       (!q || `${l.title} ${l.summary ?? ''} ${l.description} ${l.categories.join(' ')} ${l.location ?? ''}`.toLowerCase().includes(q)),
     ).sort((a, b) => b.event.created_at - a.event.created_at);
-  }, [events, type, service, search]);
+  }, [events, type, service, search, members]);
 
   async function nearMe() {
     if (area) {
@@ -139,11 +141,11 @@ export function Market() {
             ))}
           </div>
         )}
-        {stores.events.length > 0 && (
+        {stores.events.some((ev) => members?.has(ev.pubkey)) && (
           <div className="stack">
             <h2>Shops and restaurants near you</h2>
             <div className="chips">
-              {stores.events.map((ev) => parseStore(ev, () => undefined)).filter((s): s is Store => !!s).map((s) => (
+              {stores.events.filter((ev) => members?.has(ev.pubkey)).map((ev) => parseStore(ev, () => undefined)).filter((s): s is Store => !!s).map((s) => (
                 <button key={s.address} type="button" className="chip" onClick={() => navigate(storePath(s.address))}>{s.kind === 'restaurant' ? '🍽' : s.kind === 'shop' ? '🛍' : '🛠'} {s.name}</button>
               ))}
             </div>
@@ -162,10 +164,10 @@ export function Market() {
   );
 }
 
-/** How much to trust someone: 1 if the reader follows them, 0.5 inside the starting network, else 0. */
+/** How much to trust someone: 1 if the reader follows them, 0.5 for other Fairground accounts, else 0. */
 async function trustFunction(): Promise<(pubkey: string) => number> {
   const follows = new Set(load<string[]>('follows', []));
-  const network = await loadNetwork().catch(() => new Set<string>());
+  const network = await loadMembers().catch(() => new Set<string>());
   return (pk) => (follows.has(pk) ? 1 : network.has(pk) ? 0.5 : 0);
 }
 

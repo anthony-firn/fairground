@@ -1,7 +1,8 @@
 /**
- * The optional donation after a payout. Clients offer it only after a creator's payment is verified, never pre-select
- * it, and never take it out of the advertiser's payment: the creator sends it from their own wallet if they choose.
- * It is split between development and the relays the creator uses; see commons.ts.
+ * Optional donations. Clients offer one after money changes hands (a creator's verified payout, an advertiser's
+ * payment, a seller's paid order) and let anyone give at any time. It is never pre-selected and never taken out of a
+ * payment: the person sends it from their own wallet if they choose. It is split between development and the relays
+ * the person uses; see commons.ts.
  */
 import type { Event } from 'nostr-tools/pure';
 import { KIND } from './kinds.ts';
@@ -28,10 +29,10 @@ export interface DonationTransfer {
 export function createDonationReceipt(
   nostrKey: Uint8Array,
   pq: PqKeys,
-  d: { payment: Event; rail: string; transfers: DonationTransfer[]; created_at?: number },
+  d: { payment?: Event; rail: string; transfers: DonationTransfer[]; created_at?: number },
 ): Event {
   const tags = [
-    ['e', d.payment.id, '', 'payment'],
+    ...(d.payment ? [['e', d.payment.id, '', 'payment']] : []),
     ...d.transfers.map((t) => ['tx', d.rail, t.txid, t.amount.toString(), t.recipient]),
   ];
   return signHybrid({ kind: KIND.donation, created_at: d.created_at ?? now(), content: '', tags }, nostrKey, pq);

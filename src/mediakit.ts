@@ -15,6 +15,9 @@ import { markedEvent, now, tag, tagValue } from './tags.ts';
 
 export const MEDIA_KIT_D = 'media-kit';
 
+/** What a creator offers sponsors: written posts, host-read ads in their podcast, or in their videos. */
+export type KitFormat = 'post' | 'podcast' | 'video';
+
 export interface MediaKitInput {
   pitch: string;
   /** Rate per sponsored post. */
@@ -22,6 +25,11 @@ export interface MediaKitInput {
   topics: string[];
   /** The creator's audience survey, if they have one. */
   survey?: string;
+  formats?: KitFormat[];
+  /** Typical listens or views per episode or post, as the creator reports it. */
+  audience?: number;
+  /** Price per thousand for host-read ads, micro-dollars. */
+  cpm?: bigint;
   created_at?: number;
 }
 
@@ -38,6 +46,9 @@ export function createMediaKit(nostrKey: Uint8Array, pq: PqKeys, k: MediaKitInpu
     ...k.topics.map((t) => ['t', t.toLowerCase()]),
   ];
   if (k.survey) tags.push(['e', k.survey, '', 'survey']);
+  for (const f of k.formats ?? []) tags.push(['format', f]);
+  if (k.audience) tags.push(['audience', String(Math.round(k.audience))]);
+  if (k.cpm) tags.push(['cpm', k.cpm.toString()]);
   return signHybrid({ kind: KIND.mediaKit, created_at: k.created_at ?? now(), content: k.pitch, tags }, nostrKey, pq);
 }
 
@@ -53,7 +64,16 @@ export function parseMediaKit(ev: Event, pqKeyOf: KeyLookup): MediaKit | undefin
     rate: { amount: BigInt(amount), currency, index, basePeriod },
     topics: ev.tags.filter((t) => t[0] === 't' && t[1]).map((t) => t[1]),
     survey: markedEvent(ev, 'survey'),
+    formats: ev.tags.filter((t) => t[0] === 'format' && ['post', 'podcast', 'video'].includes(t[1])).map((t) => t[1] as KitFormat),
+    audience: Number(tagValue(ev, 'audience')) > 0 ? Number(tagValue(ev, 'audience')) : undefined,
+    cpm: /^[1-9]\d*$/.test(tagValue(ev, 'cpm') ?? '') ? BigInt(tagValue(ev, 'cpm')!) : undefined,
   };
+}
+
+/** What one insertion with this creator should cost at their CPM (or the advertiser's), from their reported audience. */
+export function insertionPrice(kit: Pick<MediaKit, 'audience' | 'cpm'>, fallbackCpm: bigint): bigint | undefined {
+  if (!kit.audience) return undefined;
+  return (BigInt(kit.audience) * (kit.cpm ?? fallbackCpm)) / 1000n;
 }
 
 /**

@@ -1,6 +1,7 @@
 /**
- * Search across posts, media, people, hashtags and the market. Free-text search uses relays that support NIP-50;
- * hashtags work on every relay. Results pass the same safety rules as the feed.
+ * Search across Fairground's posts, media, people, hashtags and market. Fairground is its own network, so search covers
+ * Fairground accounts only: it fetches their recent posts, profiles and listings and matches on the device, which also
+ * keeps what the reader searched for to themselves. Results pass the same safety rules as the feed.
  */
 import { useEffect, useMemo, useState } from 'react';
 import type { Event } from 'nostr-tools/pure';
@@ -11,14 +12,12 @@ import { PostCard } from '../components/PostCard.tsx';
 import { Avatar, Name, Segmented, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
 import { getProfile, rememberProfile } from '../lib/hooks.ts';
-import { pool, query } from '../lib/net.ts';
-import { allowed, loadNetwork, safetySettings } from '../lib/safety.ts';
+import { authorChunks, loadMembers } from '../lib/members.ts';
+import { query } from '../lib/net.ts';
+import { allowed, safetySettings } from '../lib/safety.ts';
 import { load } from '../lib/storage.ts';
 import { listingPath } from './Market.tsx';
 import { mediaPath } from './Media.tsx';
-
-/** Free relays that support NIP-50 search, checked October 2026. */
-export const SEARCH_RELAYS = ['wss://search.nos.today', 'wss://relay.noswhere.com'];
 
 type Tab = 'posts' | 'people' | 'market';
 
@@ -53,15 +52,17 @@ export function Search({ query: q }: { query: URLSearchParams }) {
       const t = term.trim();
       const hashtag = t.startsWith('#') ? t.slice(1).toLowerCase() : undefined;
       const kinds = tab === 'people' ? [0] : tab === 'market' ? [KIND.listing] : ALL_MEDIA_KINDS;
-      const found = hashtag
-        ? await query({ kinds, '#t': [hashtag], limit: 100 }, 4000)
-        : await pool.querySync(load<string[]>('searchRelays', SEARCH_RELAYS), { kinds, search: t, limit: 100 }, { maxWait: 5000 }).catch(() => []);
+      const network = await loadMembers().catch(() => new Set<string>());
+      const batches = await Promise.all(authorChunks(network).map((authors) =>
+        query(hashtag ? { kinds, authors, '#t': [hashtag], limit: 200 } : { kinds, authors, limit: tab === 'people' ? authors.length : 500 }, 4000)));
+      const words = t.toLowerCase().split(/\s+/).filter(Boolean);
+      const searchable = (ev: Event) => (ev.kind === 0 ? profileText(ev) : ev.kind === KIND.listing ? `${parseListing(ev)?.title ?? ''} ${ev.content}` : `${ev.tags.find((x) => x[0] === 'title')?.[1] ?? ''} ${ev.content}`).toLowerCase();
+      const found = batches.flat().filter((ev) => hashtag || words.every((w) => searchable(ev).includes(w))).slice(0, 200);
       if (tab === 'people') found.forEach(rememberProfile);
       else {
         const authors = [...new Set(found.map((e) => e.pubkey))].slice(0, 200);
         (await query({ kinds: [0], authors }, 2500)).forEach(rememberProfile);
       }
-      const network = await loadNetwork().catch(() => new Set<string>());
       const settings = safetySettings();
       const follows = new Set(load<string[]>('follows', []));
       const muted = new Set(load<string[]>('muted', []));
@@ -69,9 +70,7 @@ export function Search({ query: q }: { query: URLSearchParams }) {
         if (muted.has(ev.pubkey)) return false;
         const text = ev.kind === 0 ? profileText(ev) : ev.kind === KIND.listing ? `${parseListing(ev)?.title ?? ''} ${ev.content}` : ev.content;
         if (!allowed({ ...ev, content: text }, { ...settings, allLanguages: true }, follows.has(ev.pubkey))) return false;
-        // Search reaches beyond the starting network, so strangers need at least a named profile.
-        const p = getProfile(ev.pubkey);
-        return ev.kind === 0 || follows.has(ev.pubkey) || network.has(ev.pubkey) || settings.unvetted || !!(p?.name || p?.display_name);
+        return network.has(ev.pubkey);
       });
       if (!cancelled) {
         setResults(safe.sort((a, b) => Number(network.has(b.pubkey)) - Number(network.has(a.pubkey)) || b.created_at - a.created_at));

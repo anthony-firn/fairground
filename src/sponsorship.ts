@@ -22,10 +22,32 @@ import {
 import { RAILS } from './rails/index.ts';
 import type { Rail } from './rails/rail.ts';
 import { MEMO } from './memos.ts';
+import { placementProblem, SLOTS, type AdFormat, type Slot } from './ads.ts';
 import { markedEvent, now, tag, tagValue } from './tags.ts';
 
 /** Sponsored posts must say so (FTC Endorsement Guides, 16 CFR 255). `#ad` in the text is the required disclosure. */
 export const hasDisclosure = (text: string): boolean => /(^|\s)#ad\b/i.test(text);
+
+/**
+ * What the advertiser asks for, beyond the price. A `post` deal is delivered by a disclosed post; a `host-read` deal by
+ * a placement (ads.ts): the creator's own recorded read, inserted into their episodes or videos during the flight.
+ */
+export interface OfferTerms {
+  format: AdFormat;
+  media: ('audio' | 'video')[];
+  slots: Slot[];
+  flight?: { start: number; end: number };
+  /** Talking points the read should cover, and things it must not say. */
+  points: string[];
+  avoid: string[];
+  url?: string;
+  /** This creator's promo code. */
+  code?: string;
+  /** Whether the advertiser approves the recorded read before it plays. */
+  approval: boolean;
+  /** The campaign the offer belongs to. */
+  campaign?: string;
+}
 
 export interface OfferInput {
   /** Stable identifier; republishing with the same slug replaces the offer until someone accepts it. */
@@ -38,6 +60,7 @@ export interface OfferInput {
   deadline: number;
   /** Restricts the offer to one creator's pubkey; open to anyone when omitted. */
   creator?: string;
+  terms?: OfferTerms;
   created_at?: number;
 }
 
@@ -56,6 +79,7 @@ export function createOffer(nostrKey: Uint8Array, pq: PqKeys, o: OfferInput): Ev
     ['deadline', String(o.deadline)],
   ];
   if (o.creator) tags.push(['p', o.creator]);
+  if (o.terms) tags.push(...termTags(o.terms));
   return signHybrid({ kind: KIND.offer, created_at: o.created_at ?? now(), content: o.brief, tags }, nostrKey, pq);
 }
 
@@ -78,6 +102,37 @@ export function parseOffer(ev: Event): Offer | undefined {
     rail,
     deadline,
     creator: tagValue(ev, 'p'),
+    terms: parseTerms(ev),
+  };
+}
+
+function termTags(t: OfferTerms): string[][] {
+  const tags = [['format', t.format], ...t.media.map((m) => ['media', m]), ...t.slots.map((s) => ['slot', s]),
+    ...t.points.map((p) => ['point', p]), ...t.avoid.map((a) => ['avoid', a])];
+  if (t.flight) tags.push(['flight', String(t.flight.start), String(t.flight.end)]);
+  if (t.url) tags.push(['r', t.url]);
+  if (t.code) tags.push(['code', t.code]);
+  if (t.approval) tags.push(['approval', 'read']);
+  if (t.campaign) tags.push(['a', t.campaign]);
+  return tags;
+}
+
+function parseTerms(ev: Event): OfferTerms | undefined {
+  const format = tagValue(ev, 'format');
+  if (format !== 'host-read' && format !== 'post') return undefined;
+  const list = (name: string) => ev.tags.filter((t) => t[0] === name && t[1]).map((t) => t[1]);
+  const [, start, end] = tag(ev, 'flight') ?? [];
+  return {
+    format,
+    media: list('media').filter((m): m is 'audio' | 'video' => m === 'audio' || m === 'video'),
+    slots: list('slot').filter((s): s is Slot => SLOTS.includes(s as Slot)),
+    flight: start && end && Number(end) > Number(start) ? { start: Number(start), end: Number(end) } : undefined,
+    points: list('point'),
+    avoid: list('avoid'),
+    url: tagValue(ev, 'r'),
+    code: tagValue(ev, 'code'),
+    approval: tagValue(ev, 'approval') === 'read',
+    campaign: tagValue(ev, 'a'),
   };
 }
 
@@ -225,7 +280,7 @@ export function checkDeal(deal: Deal, { pqKeyOf, rails = RAILS }: DealOptions): 
   const accProblem = acceptanceProblem(acc, offer, rail, pqKeyOf);
   if (accProblem) return stop('offered', accProblem);
   if (!post) return stop('accepted');
-  const postProblem = deliveryProblem(post, acc, offer, pqKeyOf);
+  const postProblem = offer.terms?.format === 'host-read' ? placementProblem(post, acc, offer, pqKeyOf) : deliveryProblem(post, acc, offer, pqKeyOf);
   if (postProblem) return stop('accepted', postProblem);
   if (!receipt) return stop('delivered');
   const receiptIssue = receiptProblem(receipt, acc, post, offer, pqKeyOf);

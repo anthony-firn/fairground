@@ -18,7 +18,8 @@
     "relay": "node tools/dev-relay.ts",
     "app:dev": "npm --prefix app run dev",
     "app:build": "npm --prefix app run build",
-    "index:publish": "node tools/publish-index.ts"
+    "index:publish": "node tools/publish-index.ts",
+    "gateway:build": "node gateway/build.ts"
   },
   "dependencies": {
     "@cloudflare/blindrsa-ts": "^0.4.6",
@@ -30,6 +31,7 @@
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/ws": "^8.18.2",
+    "fast-xml-parser": "^5.11.2",
     "playwright": "^1.64.1",
     "typescript": "^7.0.2",
     "ws": "^8.22.0"

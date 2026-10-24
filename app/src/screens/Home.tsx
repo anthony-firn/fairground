@@ -40,6 +40,24 @@ function ModelLine({ status }: { status: ModelStatus }) {
   return <p className="status" style={{ padding: '8px 16px 0' }}><span className={`dot ${status === 'ready' ? 'good' : status === 'loading' ? 'warn' : ''}`} />{text}</p>;
 }
 
+/** Fairground is new and its own network, so the first readers see a small feed: say so, and invite them in. */
+function EarlyDays() {
+  const { navigate } = useApp();
+  return (
+    <div className="card stack early" style={{ margin: 16 }}>
+      <strong>You’re early.</strong>
+      <span className="small">Fairground just opened. It’s its own network, so everything here comes from people on Fairground, and there aren’t many of us
+        yet. What you post now is what the next people see first.</span>
+      <div className="row wrap">
+        <button type="button" className="btn primary small" onClick={() => navigate('/post')}>Post something</button>
+        <button type="button" className="btn small" onClick={() => navigate('/podcast/new')}>Start a podcast</button>
+        <button type="button" className="btn small" onClick={() => navigate('/create/kit')}>Get sponsored</button>
+        <button type="button" className="btn small" onClick={() => navigate('/promote')}>Advertise</button>
+      </div>
+    </div>
+  );
+}
+
 export function Home() {
   const { account, recipeVersion, navigate } = useApp();
   const feed = useFeed(account, recipeVersion);
@@ -60,12 +78,7 @@ export function Home() {
       )}
       <SurveyPrompts follows={feed.follows} />
       {!feed.ready && Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton" />)}
-      {feed.ready && !feed.posts.length && (
-        <div className="page center">
-          <p className="muted">Nothing to show yet. Check your connection, or try the “Following” or “Trusted and popular” feeds.</p>
-          <button type="button" className="btn" onClick={() => feed.refresh()}>Try again</button>
-        </div>
-      )}
+      {feed.ready && feed.posts.length < 12 && <EarlyDays />}
       {feed.posts.map((r) => (
         <PostCard key={r.event.id} post={r.event} ranked={r} liked={feed.liked.has(r.event.id)} onReact={feed.react} onWhy={setWhy} onMenu={setMenu} />
       ))}

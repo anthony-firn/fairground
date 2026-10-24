@@ -63,3 +63,12 @@ test('reader languages come from the browser and grow with what they engage with
   assert.deepEqual([...readerLanguages(['en-US'], { es: 6, en: 20 })].sort(), ['en', 'es']);
   assert.deepEqual([...readerLanguages(['en-US'], { es: 2, en: 40 })], ['en'], 'a couple of clicks is not a preference');
 });
+
+test('HLS streams are recognised, with a plain file preferred for thumbnails when there is one', () => {
+  assert.deepEqual(toMedia(note('Live https://x.example/live/index.m3u8'))?.video, { url: 'https://x.example/live/index.m3u8', hls: 'https://x.example/live/index.m3u8' });
+  const both = finalizeEvent({ kind: 21, created_at: 1, content: '', tags: [['title', 'Both'], ['imeta', 'url https://x.example/v.m3u8', 'm application/x-mpegURL'], ['imeta', 'url https://x.example/v.mp4', 'm video/mp4', 'image https://x.example/p.jpg']] }, key);
+  const v = toMedia(both)!.video!;
+  assert.equal(v.url, 'https://x.example/v.mp4');
+  assert.equal(v.hls, 'https://x.example/v.m3u8');
+  assert.equal(v.poster, 'https://x.example/p.jpg');
+});

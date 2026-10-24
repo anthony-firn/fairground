@@ -14,6 +14,7 @@ import {
 } from '@core/commerce.ts';
 import { algorandUsdc, RAIL } from '@core/rails/algorand.ts';
 import { Field, Name, Segmented, Sheet, TopBar } from '../components/ui.tsx';
+import { DonationSheet } from '../components/DonationSheet.tsx';
 import { useApp } from '../context.ts';
 import { sendMessage, useMessages, type Message } from '../lib/dm.ts';
 import { timeAgo, usd } from '../lib/format.ts';
@@ -86,6 +87,7 @@ function Buying() {
 function IncomingOrder({ order, buyer, at, messages }: { order: Order; buyer: string; at: number; messages: Message[] }) {
   const { account, toast } = useApp();
   const [paid, setPaid] = useState<bigint>();
+  const [donating, setDonating] = useState(false);
   const status = latestStatus(messages, order.orderId, account.pubkey);
   useEffect(() => {
     orderPayment(order, algorandUsdc, at).then((p) => setPaid(p.paid), () => undefined);
@@ -108,7 +110,11 @@ function IncomingOrder({ order, buyer, at, messages }: { order: Order; buyer: st
       <span className={`small ${paid !== undefined && paid >= BigInt(order.total) ? 'good' : 'warn'}`}>
         {paid === undefined ? 'Checking payment…' : paid >= BigInt(order.total) ? `Paid ${usd(paid)}, confirmed on the chain` : paid > 0n ? `Partly paid: ${usd(paid)}` : 'Not paid yet'}
       </span>
-      <div className="row wrap">{nextSteps.map((s) => <button key={s} type="button" className={`btn small${s === 'declined' ? '' : ' primary'}`} onClick={() => update(s)}>{STATUS_LABELS[s]}</button>)}</div>
+      <div className="row wrap">
+        {nextSteps.map((s) => <button key={s} type="button" className={`btn small${s === 'declined' ? '' : ' primary'}`} onClick={() => update(s)}>{STATUS_LABELS[s]}</button>)}
+        {paid !== undefined && paid >= BigInt(order.total) && status === 'completed' && <button type="button" className="btn small" onClick={() => setDonating(true)}>Give a little back</button>}
+      </div>
+      {donating && paid && <DonationSheet amount={paid} onClose={() => setDonating(false)} />}
     </div>
   );
 }

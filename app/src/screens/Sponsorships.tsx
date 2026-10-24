@@ -18,8 +18,10 @@ import {
 } from '@core/sponsorship.ts';
 import { markedEvent, tagValue } from '@core/tags.ts';
 import { DonationSheet } from '../components/DonationSheet.tsx';
+import { readStatus, RecordReadSheet } from '../components/RecordRead.tsx';
 import { Name, Segmented, Sheet, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
+import { ensureMembers } from '../lib/members.ts';
 import { loadIndex, payoutAddress, pqKeys, priceNow, useIndex } from '../lib/data.ts';
 import { nowSeconds, usd } from '../lib/format.ts';
 import { useEvents } from '../lib/hooks.ts';
@@ -88,7 +90,9 @@ function OfferSheet({ offer, record, onClose }: { offer: Offer; record?: Record;
     }
   }
 
+  if (accepted && offer.terms?.format === 'host-read') return <RecordReadSheet acceptance={accepted} offer={offer} onClose={() => (onClose(), navigate('/create/deals'))} />;
   if (accepted) return <DeliverSheet acceptance={accepted} onClose={() => (onClose(), navigate('/create/deals'))} />;
+  const t = offer.terms;
   return (
     <Sheet title={offer.title} onClose={onClose}>
       <p className="small muted">From <strong><Name pubkey={offer.advertiser} /></strong> · {recordText(record)}</p>
@@ -96,10 +100,21 @@ function OfferSheet({ offer, record, onClose }: { offer: Offer; record?: Record;
       <div className="card small stack" style={{ gap: 4 }}>
         <div className="row between"><span>Pays</span><strong>{usd(price)}</strong></div>
         {offer.price.index !== FIXED_INDEX && <div className="muted">Kept in step with the cost of living until you’re paid.</div>}
-        <div className="row between"><span>Post by</span><span>{new Date(offer.deadline * 1000).toLocaleDateString()}</span></div>
+        {t?.format === 'host-read' ? (
+          <>
+            <div className="row between"><span>What</span><span>A host-read ad in your own voice{t.media.includes('video') ? ', in podcasts and videos' : ''}</span></div>
+            <div className="row between"><span>Slots</span><span>{t.slots.map((s) => `${s}-roll`).join(', ') || 'Any'}</span></div>
+            {t.flight && <div className="row between"><span>Runs</span><span>{new Date(t.flight.start * 1000).toLocaleDateString()} to {new Date(t.flight.end * 1000).toLocaleDateString()}</span></div>}
+            {t.approval && <div className="muted">The sponsor hears and approves your read before it runs.</div>}
+          </>
+        ) : <div className="row between"><span>Post by</span><span>{new Date(offer.deadline * 1000).toLocaleDateString()}</span></div>}
         <div className="row between"><span>Paid to</span><span>your own wallet, by the advertiser</span></div>
       </div>
-      <button type="button" className="btn primary block" onClick={() => accept()}>Accept and write the post</button>
+      {t?.points.length ? <p className="small"><strong>Talking points:</strong> {t.points.join(' · ')}</p> : null}
+      {t?.avoid.length ? <p className="small warn"><strong>Don’t say:</strong> {t.avoid.join(' · ')}</p> : null}
+      {t?.code && <p className="small"><strong>Your promo code:</strong> {t.code}</p>}
+      <p className="tiny muted">Only accept products you’d recommend anyway: that’s what makes host-reads work, for you and for them.</p>
+      <button type="button" className="btn primary block" onClick={() => accept()}>{t?.format === 'host-read' ? 'Accept and record the read' : 'Accept and write the post'}</button>
       {payout && <PayoutSheet onClose={() => setPayout(false)} onSaved={(a) => accept(a)} />}
     </Sheet>
   );
@@ -116,7 +131,8 @@ export function Sponsors() {
 
   useEffect(() => {
     (async () => {
-      const parsed = events.map(parseOffer).filter((o): o is Offer => !!o && o.deadline > nowSeconds() && o.advertiser !== account.pubkey && (!o.creator || o.creator === account.pubkey));
+      const members = await ensureMembers(events.map((e) => e.pubkey));
+      const parsed = events.map(parseOffer).filter((o): o is Offer => !!o && members.has(o.advertiser) && o.deadline > nowSeconds() && o.advertiser !== account.pubkey && (!o.creator || o.creator === account.pubkey));
       const lookup = await pqKeys(parsed.map((o) => o.advertiser));
       setOffers(parsed.filter((o) => checkDeal({ offer: o.event }, { pqKeyOf: lookup }).stage === 'offered'));
     })().catch(() => undefined);
@@ -158,7 +174,7 @@ export function Sponsors() {
   );
 }
 
-function DealRow({ acceptance, delivery, receipt }: { acceptance: Event; delivery?: Event; receipt?: Event }) {
+function DealRow({ acceptance, delivery, receipt, approvals }: { acceptance: Event; delivery?: Event; receipt?: Event; approvals: Event[] }) {
   const offerEvent = acceptedOffer(acceptance);
   const offer = offerEvent && parseOffer(offerEvent);
   const [check, setCheck] = useState<DealCheck>();
@@ -186,11 +202,14 @@ function DealRow({ acceptance, delivery, receipt }: { acceptance: Event; deliver
   }, [offerEvent, acceptance, delivery, receipt]);
 
   if (!offer) return null;
+  const hostRead = offer.terms?.format === 'host-read';
+  const read = hostRead ? readStatus(offer, delivery, approvals) : undefined;
   let status = <span className="badge">Checking…</span>;
   if (payment?.ok) status = <span className="badge good">Paid {usd(payment.paid!)}</span>;
   else if (payment) status = <span className="badge bad" title={payment.problems.join('; ')}>Payment problem</span>;
+  else if (read && read.label !== 'Scheduled') status = <span className={`badge ${read.tone}`}>{read.label}</span>;
   else if (check?.stage === 'accepted') status = <span className="badge warn">Write your post</span>;
-  else if (check?.stage === 'delivered') status = <span className="badge">Waiting for payment</span>;
+  else if (check?.stage === 'delivered') status = <span className="badge">{hostRead ? 'Running · awaiting payment' : 'Waiting for payment'}</span>;
   else if (check?.problems.length) status = <span className="badge bad" title={check.problems.join('; ')}>Problem</span>;
 
   return (
@@ -198,9 +217,12 @@ function DealRow({ acceptance, delivery, receipt }: { acceptance: Event; deliver
       <div className="row between"><h3>{offer.title}</h3>{status}</div>
       <p className="small muted" style={{ margin: 0 }}>From <Name pubkey={offer.advertiser} /></p>
       {payment && !payment.ok && <p className="small bad">{payment.problems[0]}</p>}
-      {check?.stage === 'accepted' && <button type="button" className="btn primary" onClick={() => setWriting(true)}>Write the sponsored post</button>}
+      {read?.note && <p className="small bad" style={{ margin: 0 }}>Sponsor’s notes: {read.note}</p>}
+      {(check?.stage === 'accepted' || read?.label === 'Changes asked') && !receipt && (
+        <button type="button" className="btn primary" onClick={() => setWriting(true)}>{hostRead ? (delivery ? 'Record it again' : 'Record your read') : 'Write the sponsored post'}</button>
+      )}
       {payment?.ok && <button type="button" className="btn" onClick={() => setDonating(true)}>Give a little back</button>}
-      {writing && <DeliverSheet acceptance={acceptance} onClose={() => setWriting(false)} />}
+      {writing && (hostRead ? <RecordReadSheet acceptance={acceptance} offer={offer} onClose={() => setWriting(false)} /> : <DeliverSheet acceptance={acceptance} onClose={() => setWriting(false)} />)}
       {donating && receipt && payment?.paid && <DonationSheet amount={payment.paid} payment={receipt} onClose={() => setDonating(false)} />}
     </div>
   );
@@ -210,8 +232,12 @@ export function Deals() {
   const { account, navigate } = useApp();
   const { events: acceptances, loading } = useEvents({ kinds: [KIND.acceptance], authors: [account.pubkey], limit: 100 });
   const ids = acceptances.map((a) => a.id);
-  const { events: posts } = useEvents(ids.length ? { kinds: [1], authors: [account.pubkey], '#e': ids } : null);
+  const { events: posts } = useEvents(ids.length ? { kinds: [1, KIND.placement], authors: [account.pubkey], '#e': ids } : null);
   const { events: receipts } = useEvents(ids.length ? { kinds: [KIND.payment], '#e': ids } : null);
+  const placementIds = posts.filter((p) => p.kind === KIND.placement).map((p) => p.id);
+  const { events: approvals } = useEvents(placementIds.length ? { kinds: [KIND.approval], '#e': placementIds } : null);
+  // A placement is replaced when it's re-recorded; the newest is the delivery.
+  const newestFirst = [...posts].sort((a, b) => b.created_at - a.created_at);
   const find = (list: Event[], marker: string, id: string) => list.filter((e) => markedEvent(e, marker) === id).sort((a, b) => a.created_at - b.created_at)[0];
   return (
     <>
@@ -225,7 +251,8 @@ export function Deals() {
           </div>
         )}
         {acceptances.map((acc) => (
-          <DealRow key={acc.id} acceptance={acc} delivery={find(posts, 'sponsorship', acc.id)}
+          <DealRow key={acc.id} acceptance={acc} approvals={approvals}
+            delivery={newestFirst.find((e) => e.kind === KIND.placement && markedEvent(e, 'sponsorship') === acc.id) ?? find(posts.filter((e) => e.kind === 1), 'sponsorship', acc.id)}
             receipt={find(receipts.filter((r) => r.pubkey === tagValue(acc, 'p')), 'acceptance', acc.id)} />
         ))}
       </div>

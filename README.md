@@ -25,9 +25,12 @@ seconds:
 
 ## How it works
 
-**Social layer: [Nostr](https://github.com/nostr-protocol/nips).** A post is an event signed by its author's key and
-stored on independent relays that anyone can run. The app is a static site, and the same code ships as the iOS and
-Android apps (Capacitor). Creators own their identity and audience: there's no account to be banned from and no cut.
+**Its own network, built on Nostr's plumbing.** A post is an event signed by its author's key and stored on
+independent relays that anyone can run, the way [Nostr](https://github.com/nostr-protocol/nips) works. But Fairground
+is its own network: the app shows only Fairground accounts (every account joins by publishing its post-quantum key
+binding on first start), never the wider Nostr network, so its spam and abuse never arrive and the first creators
+here aren't drowned out. The app is a static site, and the same code ships as the iOS and Android apps (Capacitor).
+Creators own their identity and audience: there's no account to be banned from and no cut.
 
 **Readers own their algorithm.** Ranking runs on the reader's device from a recipe they control:
 
@@ -84,8 +87,32 @@ something to watch from the first day. Anyone can post in any format: photos are
 on the device, and videos are uploaded with their length, size and a poster frame read on the device. On a computer
 the app has a sidebar, wide grids and a side column, rather than a stretched phone layout.
 
-**Search.** Hashtags work on every relay, and free text uses relays that support NIP-50 search. Results go through the
-same safety rules as the feed, and accounts from outside the reader's network need at least a named profile.
+**Podcasts in every podcast app.** A creator starts a show (artwork, category, explicit flag) and uploads episodes,
+marking natural pauses where mid-roll ads can go. Each show gets a standard RSS feed with the iTunes and Podcasting 2.0
+tags, served by a podcast gateway, that they paste once into Apple Podcasts, Spotify, YouTube Music and Podcast Index.
+The gateway (`src/gateway.ts`, about 100 KB bundled) is a stateless request handler that reads signed events from
+relays, so anyone can run one; the one at evolvetech.dev/fairground runs as a Netlify edge function. It serves only
+Fairground accounts, applies the same always-blocked rules as the app, and lets its operator take a show down.
+Episodes are ordinary MP3 or M4A files, which every app accepts from any publisher. HLS streams play in the app and
+are listed as a Podcasting 2.0 alternate enclosure; Apple Podcasts' own HLS video is open only to hosting providers
+Apple has approved, through a private API, so the feed never depends on it.
+
+**Host-read ads, inserted dynamically.** An advertiser plans a campaign (goal, offer and promo code, talking points,
+what not to say, formats and slots, audience, budget at a price per thousand listens, dates and brand-safety
+exclusions) and the app matches it to creators' media kits. Each creator gets an offer with their own promo code and
+tracked link. A creator who accepts reads the ad in their own voice, recorded in the app or uploaded, and publishes a
+placement: the recording, its slots (pre-, mid- or post-roll), its dates and the shows or videos it runs on. If the
+offer asks, the advertiser approves that exact recording first. Nothing is baked in: Fairground's player inserts the
+read while it plays (labelled with the sponsor, skippable, as Apple also requires of ads), and the gateway stitches it
+into MP3 downloads for every other app, splicing MPEG frames at the creator's marks without re-encoding and supporting
+the HEAD and byte-range requests Apple requires. So a read runs across the whole back catalogue, starts and stops on
+its dates, and gives way to the next sponsor. Reads recorded in the app are converted on the device to MP3 matching the
+show's episodes. The campaign page tracks every creator from offer to paid, and turns the orders and revenue each
+promo code brought in into cost per order and return on spend.
+
+**Search.** Search covers Fairground accounts only: the app fetches their recent posts, profiles and listings and
+matches on the device, so what a reader searches for stays with them. Results go through the same safety rules as the
+feed.
 
 **Reddit-style comments everywhere.** Posts, photos, videos, shorts, episodes and listings have threaded replies with up and down votes, Best, Top, New
 and Controversial sorting, and collapsible branches.
@@ -96,16 +123,18 @@ and Controversial sorting, and collapsible branches.
   authors are blocked.
 - Safe search hides explicit content by default. Adults can turn it off after confirming they are 18 or older; in the
   phone apps that's only possible on the web, as the app stores require.
-- Strangers reach the default feed only if long-standing, widely followed accounts follow them, which keeps new spam
-  and abuse accounts out.
+- Only Fairground accounts appear, which keeps out the spam and abuse that circulate on the wider Nostr network.
 - Slurs, threats, spam and bots are hidden, and every post can be hidden or reported. Titles and image descriptions
   are checked as well as the text.
 - Posts are in the reader's languages: their device's, plus any they keep reading, liking or writing in, detected on
   the device. That keeps the start feeling like their own community rather than the whole world at once. Languages
   can be added or removed in settings, or the filter turned off.
 
-**The commons loop.** After a payout, creators (and advertisers, after paying) can donate, opt-in, never pre-selected.
-They see exactly how it splits between development and relays, and which relays get it: the ones that actually served
+**The commons loop.** After money changes hands (a creator's payout, an advertiser's payment, a seller's paid order,
+a month of fan support) the person is offered an optional donation, never pre-selected, and anyone can give from You
+or About at any time. Development donations go to the project's public USDC account on Algorand, which the app offers
+only once it can receive USDC.
+Donors see exactly how it splits between development and relays, and which relays get it: the ones that actually served
 them, starting with relays run by their own followers. Anyone can run a relay and receive donations by publishing a
 payout address that their relay's NIP-11 document confirms. Relays can pledge to pass a share back to creators. The
 loop is damped so it can't be farmed: relays are credited only for events they delivered first to readers who saw
@@ -129,8 +158,19 @@ the account's vault on relays: keys, settings, AI interests, subscriptions, payo
   cost-of-living stablecoin is liquid and stable enough to pay with today; the settlement rail is named in each offer.
 - **Index publishers are trusted.** A value counts only when the client's threshold of trusted publishers agree and
   none disagree. Until independent publishers exist, the default trusts one (the project's), which could set a value.
-- **No escrow, no view counts.** The advertiser pays after the post goes up, with the public payment record as the
-  enforcement, and deals are a flat fee per post.
+- **No escrow, no verified listen counts.** The advertiser pays after the post goes up or the read runs, with the
+  public payment record as the enforcement. Deals are a flat fee; listen counts in media kits are what creators report,
+  and promo codes are how an advertiser checks them. The gateway doesn't count downloads yet.
+- **The public gateway has costs.** Feeds are small and cached, and plain downloads redirect to the creator's file, but
+  stitched downloads stream through the gateway, which uses its bandwidth. It runs on Netlify only, so during a
+  failover to the backup host feeds are unavailable. Relay operators can run gateways too.
+- **Stitching needs MP3.** M4A episodes play reads in the app but not in other apps' downloads, and a read is spliced
+  in only when its sample rate and channels match the episode's (the app converts recordings to match). Video reads
+  play in the app only; video podcast apps get the video without them.
+- **Media hosting is free Blossom servers.** They take podcast-sized files today, but nothing obliges them to keep
+  them; serious shows should mirror their files or link their own hosting.
+- **The network starts small.** Branching from Nostr means the first readers see only what Fairground's first
+  members post.
 - **Surveys hide answers, not participation.** Who took part is public; that list is what lets advertisers check the
   count. A creator can fill in answers only for participants who didn't answer. Answers are sent while the app is open.
 - **Support totals count money and addresses, not people,** and a support memo links the paying address to the creator.
@@ -145,8 +185,8 @@ the account's vault on relays: keys, settings, AI interests, subscriptions, payo
   guarantees.
 - **Private messages use NIP-17 (secp256k1), so they aren't post-quantum yet.** Swapping in a hybrid ML-KEM layer is a
   planned change.
-- **Moderation reads text and hashtags, not images.** An explicit image with an innocent caption can get past it, and
-  the starting network does most of the work against spam accounts.
+- **Moderation reads text, titles and hashtags, not images or audio.** An explicit image with an innocent caption can
+  get past it. Keeping to Fairground accounts does most of the work against spam.
 - Fairground doesn't give legal or tax advice. Creators and advertisers remain responsible for their disclosures and
   taxes.
 
@@ -164,6 +204,8 @@ node tools/dev-relay.ts   # an empty local relay; open the app with ?relay=ws://
 node e2e/smoke.ts         # end-to-end test of the built app in Chrome, against labelled test fixtures
 node e2e/market.ts        # two people: comments, safety, buying, requests, offers and orders
 node e2e/media.ts         # photos, videos, shorts, listening, search, languages, and the desktop and phone layouts
+node e2e/podcast.ts       # a show and episode, a campaign, a recorded read, approval, playback, RSS and stitching, donating
+npm run gateway:build     # bundles the podcast gateway into dist-gateway/fairground-gateway.js
 ```
 
 The app reads public relays by default. `?relay=` (repeatable) points it elsewhere, and a build with
@@ -200,15 +242,21 @@ Store releases need signing keys and developer accounts, which aren't part of th
 | `src/commons.ts` | Donations to development and relays, relay payouts, anti-farming credit, pass-on pledges |
 | `src/comments.ts` | Threads (NIP-10 and NIP-22), votes (NIP-25), Reddit-style ranking |
 | `src/commerce.ts` | Listings (NIP-99), storefronts, orders, quotes, verified reviews, credentials, reports |
-| `src/safety.ts` | Illegal-content blocking, safe search, spam and bots, languages, the starting network |
+| `src/safety.ts` | Illegal-content blocking, safe search, spam and bots, languages |
+| `src/network.ts` | Fairground membership: the key bindings that make an account part of the network |
+| `src/podcast.ts` | Shows, episodes, Apple categories and RSS feeds |
+| `src/ads.ts` | Campaigns, host-read placements, approvals and dynamic ad breaks |
+| `src/mp3.ts` | MP3 frame layout, for splicing reads in without re-encoding |
+| `src/gateway.ts` | The podcast gateway: feeds, stitched downloads with Range support, health |
 | `src/geohash.ts` | Approximate locations for "near me" |
 | `src/feed.ts` | Feed recipes, local ranking with explanations, cold start, local AI embedders |
 | `src/vault.ts` | Username-and-password vaults with passkey and recovery-code factors |
 | `src/memos.ts` | Payment memos that tie each transfer to its purpose |
 | `src/rails/algorand.ts` | USDC on Algorand: addresses, opt-in checks, payment links, transfer verification |
-| `src/defaults.ts` | Default relays, index publisher and development address |
+| `src/defaults.ts` | Default relays, index publisher, development address and gateway |
 | `app/` | The React app, its on-device model worker, and the Capacitor iOS and Android projects |
-| `tools/` | Dev relay and the CPI publisher |
+| `gateway/` | The gateway as one bundled module for edge platforms |
+| `tools/` | Dev relay (with simple NIP-50 search) and the CPI publisher |
 | `e2e/` | End-to-end tests, their test fixtures and tiny generated test media, and the demo-video recorder (real posts only) |
 | `docs/protocol.md` | Event formats and verification rules |
 

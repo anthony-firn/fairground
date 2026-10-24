@@ -5,11 +5,12 @@
 import { useEffect, useState } from 'react';
 import type { Event } from 'nostr-tools/pure';
 import { KIND } from '@core/kinds.ts';
-import { createMediaKit, parseMediaKit } from '@core/mediakit.ts';
+import { createMediaKit, parseMediaKit, type KitFormat } from '@core/mediakit.ts';
 import { parseUsd, formatUsd } from '@core/pricing.ts';
 import { algorandUsdc, isAlgorandAddress, RAIL } from '@core/rails/algorand.ts';
 import { createSupportPage, fetchSupport, monthSupport, parseSupportPage, periodOf } from '@core/support.ts';
 import { STARTER_TOPICS } from '@core/feed.ts';
+import { DonationSheet } from '../components/DonationSheet.tsx';
 import { Field, Icon, Sheet, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
 import { newPrice, payoutAddress, pqKeys, priceNow, useIndex } from '../lib/data.ts';
@@ -18,6 +19,7 @@ import { useProfile } from '../lib/hooks.ts';
 import { publish, query } from '../lib/net.ts';
 import { save } from '../lib/storage.ts';
 import { useEditProfile } from './Profile.tsx';
+import { showPath, useMyShows } from './Podcast.tsx';
 
 /** Where payments arrive: the person's own Algorand wallet, checked for typos and for USDC being switched on. */
 export function PayoutSheet({ onClose, onSaved }: { onClose: () => void; onSaved?: (address: string) => void }) {
@@ -65,6 +67,7 @@ function Step({ done, title, detail, onClick }: { done: boolean; title: string; 
 
 export function Create() {
   const { account, navigate } = useApp();
+  const shows = useMyShows();
   const profile = useProfile(account.pubkey);
   const edit = useEditProfile();
   const [payout, setPayout] = useState(false);
@@ -95,6 +98,11 @@ export function Create() {
           <button type="button" onClick={() => navigate('/create/support')}>Fan support <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/create/survey')}>Audience survey <Icon name="chevron" /></button>
         </div>
+        <h2>Podcast</h2>
+        <div className="card list">
+          {shows.map((s) => <button key={s.address} type="button" onClick={() => navigate(showPath(s.creator, s.slug))}>{s.title} <Icon name="chevron" /></button>)}
+          <button type="button" onClick={() => navigate('/podcast/new')}>{shows.length ? 'Start another podcast' : 'Start a podcast: in every podcast app'} <Icon name="chevron" /></button>
+        </div>
         <h2>Sell</h2>
         <div className="card list">
           <button type="button" onClick={() => navigate('/market/new')}>Sell something or offer a service <Icon name="chevron" /></button>
@@ -124,6 +132,7 @@ export function SupportPageScreen() {
   const [adFree, setAdFree] = useState(true);
   const [payout, setPayout] = useState(false);
   const [month, setMonth] = useState<{ total: bigint; supporters: number }>();
+  const [donating, setDonating] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -158,7 +167,12 @@ export function SupportPageScreen() {
     <>
       <TopBar title="Fan support" back={() => navigate('/create')} />
       <div className="page">
-        {month && <div className="card"><strong>{usd(month.total)}</strong> from {month.supporters} supporters this month</div>}
+        {month && (
+          <div className="card row between">
+            <span><strong>{usd(month.total)}</strong> from {month.supporters} supporters this month</span>
+            {month.total > 0n && <button type="button" className="btn small" onClick={() => setDonating(true)}>Give a little back</button>}
+          </div>
+        )}
         <Field label="Title"><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
         <Field label="What support pays for"><textarea value={pitch} onChange={(e) => setPitch(e.target.value)} /></Field>
         <Field label="Suggested monthly amount ($)" hint={index?.latest ? 'Kept in step with the cost of living.' : undefined}>
@@ -172,6 +186,7 @@ export function SupportPageScreen() {
         <button type="button" className="btn primary block" disabled={!title || !suggested} onClick={publishPage}>Turn on fan support</button>
       </div>
       {payout && <PayoutSheet onClose={() => setPayout(false)} onSaved={() => publishPage()} />}
+      {donating && month && <DonationSheet amount={month.total} onClose={() => setDonating(false)} />}
     </>
   );
 }
@@ -183,6 +198,9 @@ export function MediaKitScreen() {
   const [rate, setRate] = useState('100');
   const [topics, setTopics] = useState<string[]>([]);
   const [survey, setSurvey] = useState<string>();
+  const [formats, setFormats] = useState<KitFormat[]>(['post']);
+  const [audience, setAudience] = useState('');
+  const [cpm, setCpm] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -196,13 +214,18 @@ export function MediaKitScreen() {
       setPitch(kit.pitch);
       setRate(formatUsd(priceNow(kit.rate, index).amount));
       setTopics(kit.topics);
+      if (kit.formats?.length) setFormats(kit.formats);
+      setAudience(kit.audience ? String(kit.audience) : '');
+      setCpm(kit.cpm ? formatUsd(kit.cpm) : '');
     })().catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.pubkey]);
 
   async function publishKit() {
     try {
-      await publish(createMediaKit(account.nostrKey, account.pq, { pitch, rate: newPrice(parseUsd(rate), index), topics, survey }));
+      await publish(createMediaKit(account.nostrKey, account.pq, {
+        pitch, rate: newPrice(parseUsd(rate), index), topics, survey, formats, audience: Number(audience) || undefined, cpm: cpm ? parseUsd(cpm) : undefined,
+      }));
       toast('You’re listed. Advertisers can now find you and send offers.');
       navigate('/create');
     } catch (e) {
@@ -217,7 +240,21 @@ export function MediaKitScreen() {
       <div className="page">
         <p className="muted">List yourself for advertisers: what you make, your rate per sponsored post, and (if you’ve run one) your anonymous audience survey.</p>
         <Field label="About your content"><textarea value={pitch} onChange={(e) => setPitch(e.target.value)} placeholder="Weekly trail-running videos and honest gear reviews." /></Field>
+        <div className="stack">
+          <strong className="small">What you offer sponsors</strong>
+          <div className="chips">
+            {([['post', 'Sponsored posts'], ['podcast', 'Podcast host-reads'], ['video', 'Video host-reads']] as [KitFormat, string][]).map(([f, label]) => (
+              <button key={f} type="button" className="chip" aria-pressed={formats.includes(f)} onClick={() => setFormats(formats.includes(f) ? formats.filter((x) => x !== f) : [...formats, f])}>{label}</button>
+            ))}
+          </div>
+        </div>
         <Field label="Rate per sponsored post ($)"><input type="text" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} /></Field>
+        {formats.some((f) => f !== 'post') && (
+          <div className="row wrap">
+            <Field label="Typical listens or views per episode" hint="Be honest: sponsors compare it with what your promo codes bring in."><input type="number" min={0} value={audience} onChange={(e) => setAudience(e.target.value)} /></Field>
+            <Field label="Price per 1,000 ($)" hint="Host-reads usually go for $15 to $50; about $25 is typical."><input type="text" inputMode="decimal" value={cpm} onChange={(e) => setCpm(e.target.value)} placeholder="25" /></Field>
+          </div>
+        )}
         <div className="stack">
           <strong className="small">Topics</strong>
           <div className="chips">

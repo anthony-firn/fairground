@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { SEED_ACCOUNTS } from '@core/safety.ts';
-import { resetNetwork } from '../lib/safety.ts';
 import { KIND } from '@core/kinds.ts';
-import { DEFAULT_RELAYS } from '@core/defaults.ts';
+import { DEFAULT_RELAYS, DEVELOPMENT_ADDRESS } from '@core/defaults.ts';
 import { createRecipeEvent, DEFAULT_RECIPE, PRESET_RECIPES, recipeFromEvent, type FeedRecipe, type Signal } from '@core/feed.ts';
 import { normalizeRelayUrl } from '@core/memos.ts';
 import { periodOf, parseSupportPage } from '@core/support.ts';
 import { passwordProblem } from '@core/vault.ts';
+import { DonationSheet, developmentReady } from '../components/DonationSheet.tsx';
 import { Avatar, Field, Icon, Meter, Name, Segmented, Sheet, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
 import { backupCode } from '../lib/account.ts';
@@ -26,6 +25,7 @@ export function You() {
   const { account, navigate } = useApp();
   const edit = useEditProfile();
   const signedIn = session();
+  const [donating, setDonating] = useState(false);
   return (
     <>
       <TopBar title="You" />
@@ -49,9 +49,11 @@ export function You() {
           <button type="button" onClick={() => navigate('/account')}>Account and sign-in <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/relays')}>Relays <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/about')}>About Fairground <Icon name="chevron" /></button>
+          <button type="button" onClick={() => setDonating(true)}>Support Fairground <Icon name="heart" /></button>
         </div>
       </div>
       {edit.sheet}
+      {donating && <DonationSheet onClose={() => setDonating(false)} />}
     </>
   );
 }
@@ -118,11 +120,10 @@ export function FeedSettings() {
           <Toggle setting="showOffensive" label="Show posts with slurs or threats" />
           <Languages />
           <Toggle setting="allLanguages" label="Show posts in all languages" />
-          <Toggle setting="unvetted" label="Include accounts outside the starting network" hint="Off by default: new and unknown accounts are where most spam and abuse comes from." />
           <details className="small">
-            <summary>The starting network</summary>
-            <p className="muted">Until you follow people, strangers appear in For you only if one of these long-standing, widely followed Nostr
-              accounts follows them: {SEED_ACCOUNTS.map((s) => s.name).join(', ')}. Following people builds your own network.</p>
+            <summary>Who you see here</summary>
+            <p className="muted">Only people on Fairground. It stores posts on Nostr relays but is its own network, so the spam and
+              abuse that circulate on the wider Nostr network never reach your feed.</p>
           </details>
         </div>
         <h2>AI model</h2>
@@ -217,7 +218,7 @@ function Languages() {
   );
 }
 
-function Toggle({ setting, label, hint }: { setting: 'showOffensive' | 'allLanguages' | 'unvetted'; label: string; hint?: string }) {
+function Toggle({ setting, label, hint }: { setting: 'showOffensive' | 'allLanguages'; label: string; hint?: string }) {
   const { bumpRecipe } = useApp();
   const [on, setOn] = useState(() => load(setting, false));
   return (
@@ -226,7 +227,6 @@ function Toggle({ setting, label, hint }: { setting: 'showOffensive' | 'allLangu
       <input type="checkbox" checked={on} onChange={(e) => {
         setOn(e.target.checked);
         save(setting, e.target.checked);
-        if (setting === 'unvetted') resetNetwork();
         bumpRecipe();
       }} />
     </label>
@@ -406,17 +406,35 @@ export function SupportingScreen() {
 
 export function About() {
   const { navigate } = useApp();
+  const [donating, setDonating] = useState(false);
+  const [ready, setReady] = useState<boolean>();
+  useEffect(() => {
+    developmentReady().then(setReady, () => setReady(false));
+  }, []);
   return (
     <>
       <TopBar title="About Fairground" back={() => navigate('/you')} />
       <div className="page">
         <div className="card stack">
-          <p style={{ margin: 0 }}>Fairground is a social network with no company in the middle. Posts live on independent relays, your feed is ranked on your
-            device, advertisers and fans pay creators directly, and every deal is a public, signed record.</p>
-          <p className="small muted" style={{ margin: 0 }}>Open source under the Apache 2.0 licence. Built by Anthony Firn at EvolveTech.</p>
+          <p style={{ margin: 0 }}>Fairground is a social network with no company in the middle. Your feed is ranked on your device, advertisers and fans pay
+            creators directly, and every deal is a public, signed record. It is its own network: you see only people on Fairground.</p>
+          <p className="small muted" style={{ margin: 0 }}>Open source under the Apache 2.0 licence. Built by Anthony Firn at EvolveTech. MP3 encoding by
+            {' '}<a href="https://lame.sourceforge.io" target="_blank" rel="noopener noreferrer">LAME</a> (LGPL); streaming by hls.js.</p>
           <a className="btn" href="https://www.evolvetech.dev/projects/fairground/" target="_blank" rel="noopener noreferrer">Project page</a>
         </div>
+        <h2>How it’s funded</h2>
+        <div className="card stack">
+          <p className="small" style={{ margin: 0 }}>Fairground takes no cut of anything. It runs on optional donations, split between development and the relays
+            that carry posts. Every donation is a public transfer you can check.</p>
+          {DEVELOPMENT_ADDRESS && (
+            <p className="tiny muted" style={{ margin: 0, wordBreak: 'break-all' }}>Development fund (USDC on Algorand):{' '}
+              <a href={`https://explorer.perawallet.app/address/${DEVELOPMENT_ADDRESS}/`} target="_blank" rel="noopener noreferrer">{DEVELOPMENT_ADDRESS}</a>
+              {ready === false ? ' · opening soon' : ''}</p>
+          )}
+          <button type="button" className="btn primary" onClick={() => setDonating(true)}>Support Fairground</button>
+        </div>
       </div>
+      {donating && <DonationSheet onClose={() => setDonating(false)} />}
     </>
   );
 }

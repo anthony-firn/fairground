@@ -1,7 +1,8 @@
 /**
- * The optional donation after money changes hands, for creators after a payout and advertisers after paying. It is
- * never pre-selected: the person sees the total, how it splits between development and relays, and exactly which
- * relays (often run by their own audience) receive it, and can change any of it or skip.
+ * The optional donation: offered after money changes hands (a creator's payout, an advertiser's payment, a seller's
+ * paid order) and open to anyone at any time from You and About. It is never pre-selected: the person sees the total,
+ * how it splits between development and relays, and exactly which relays (often run by their own audience) receive
+ * it, and can change any of it or skip. The development fund is offered only once it can receive USDC.
  */
 import { useEffect, useMemo, useState } from 'react';
 import type { Event } from 'nostr-tools/pure';
@@ -21,7 +22,7 @@ import { createDonationReceipt, suggestedDonation, type DonationTransfer } from 
 import { KIND } from '@core/kinds.ts';
 import { MEMO } from '@core/memos.ts';
 import { formatUsd, parseUsd } from '@core/pricing.ts';
-import { RAIL } from '@core/rails/algorand.ts';
+import { algorandUsdc, RAIL } from '@core/rails/algorand.ts';
 import type { PaymentRequest } from '@core/rails/rail.ts';
 import { useApp } from '../context.ts';
 import { pqKeys } from '../lib/data.ts';
@@ -32,12 +33,17 @@ import { PayDialog } from './PayDialog.tsx';
 import { Field, Name, Sheet } from './ui.tsx';
 
 interface Props {
-  /** What the person was paid or paid out, which the suggestion is 2% of. */
-  amount: bigint;
+  /** What the person was paid or paid out, which the suggestion is 2% of. Without it, a plain donation. */
+  amount?: bigint;
   /** The payment receipt the donation follows, for the public record. */
-  payment: Event;
+  payment?: Event;
   onClose: () => void;
 }
+
+/** Whether the development fund can receive USDC yet, checked once per session. */
+let devReady: Promise<boolean> | undefined;
+export const developmentReady = (): Promise<boolean> =>
+  (devReady ??= DEVELOPMENT_ADDRESS ? algorandUsdc.canReceive(DEVELOPMENT_ADDRESS).catch(() => false) : Promise.resolve(false));
 
 interface Recipient {
   payout: RelayPayout;
@@ -47,13 +53,18 @@ interface Recipient {
 
 export function DonationSheet({ amount, payment, onClose }: Props) {
   const { account, toast } = useApp();
-  const [total, setTotal] = useState(formatUsd(suggestedDonation(amount)));
-  const [devPercent, setDevPercent] = useState(DEVELOPMENT_ADDRESS ? DEFAULT_DEVELOPMENT_PERCENT : 0);
+  const [total, setTotal] = useState(amount ? formatUsd(suggestedDonation(amount)) : '5.00');
+  const [devPercent, setDevPercent] = useState(DEFAULT_DEVELOPMENT_PERCENT);
+  const [dev, setDev] = useState<string | undefined>();
   const [recipients, setRecipients] = useState<Recipient[] | undefined>();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [makePublic, setMakePublic] = useState(true);
   const [queue, setQueue] = useState<(PaymentRequest & { recipient: string; label: string })[]>([]);
   const [done, setDone] = useState<DonationTransfer[]>([]);
+
+  useEffect(() => {
+    developmentReady().then((ok) => setDev(ok ? DEVELOPMENT_ADDRESS : undefined), () => undefined);
+  }, []);
 
   // Relays with a verified payout: the ones that served this person, and the ones run by their followers.
   useEffect(() => {
@@ -86,14 +97,14 @@ export function DonationSheet({ amount, payment, onClose }: Props) {
     totalMicros = 0n;
   }
   const chosen = (recipients ?? []).filter((r) => selected.has(r.payout.operator));
-  const { development, relays } = splitDonation(totalMicros, DEVELOPMENT_ADDRESS ? devPercent : 0, chosen.length > 0);
+  const { development, relays } = splitDonation(totalMicros, dev ? devPercent : 0, chosen.length > 0);
   const perRelay = useMemo(() => splitByWeight(relays, new Map(chosen.map((r) => [r.payout.operator, r.weight]))), [relays, chosen]);
-  const payments = (DEVELOPMENT_ADDRESS && development > 0n ? 1 : 0) + [...perRelay.values()].filter((v) => v > 0n).length;
-  const nobody = !DEVELOPMENT_ADDRESS && recipients !== undefined && !recipients.length;
+  const payments = (dev && development > 0n ? 1 : 0) + [...perRelay.values()].filter((v) => v > 0n).length;
+  const nobody = !dev && recipients !== undefined && !recipients.length;
 
   function start() {
     const list: typeof queue = [];
-    if (DEVELOPMENT_ADDRESS && development > 0n) list.push({ to: DEVELOPMENT_ADDRESS, amount: development, memo: MEMO.development, recipient: 'development', label: 'Fairground development' });
+    if (dev && development > 0n) list.push({ to: dev, amount: development, memo: MEMO.development, recipient: 'development', label: 'Fairground development' });
     for (const r of chosen) {
       const share = perRelay.get(r.payout.operator) ?? 0n;
       if (share > 0n) list.push({ to: r.payout.payTo, amount: share, memo: MEMO.relay(r.payout.relays[0]), recipient: r.payout.relays[0], label: r.payout.relays[0].replace(/^wss?:\/\//, '') });
@@ -132,14 +143,14 @@ export function DonationSheet({ amount, payment, onClose }: Props) {
   }
 
   return (
-    <Sheet title="Give a little back?" onClose={onClose}>
+    <Sheet title={amount ? 'Give a little back?' : 'Support Fairground'} onClose={onClose}>
       <p className="muted">Optional. Fairground takes nothing from payments. A small donation keeps it running: development builds the app,
         and relays (often run by your own audience) carry everyone’s posts.</p>
       {nobody ? (
-        <p className="card small">None of your relays accept donations yet, and the development fund isn’t set up yet. Nothing to do here for now.</p>
+        <p className="card small">Donations open as soon as Fairground’s development fund is ready to receive. Thank you for thinking of it.</p>
       ) : (
         <>
-          <Field label="Total" hint={`Suggested: 2% of ${usd(amount)}`}>
+          <Field label="Total" hint={amount ? `Suggested: 2% of ${usd(amount)}` : undefined}>
             <input type="text" inputMode="decimal" value={total} onChange={(e) => setTotal(e.target.value.replace(/[^\d.]/g, ''))} />
           </Field>
           <div className="stack">
@@ -148,9 +159,10 @@ export function DonationSheet({ amount, payment, onClose }: Props) {
               <i style={{ width: `${totalMicros ? Number((development * 100n) / (totalMicros || 1n)) : 0}%` }} />
               <i style={{ flex: 1 }} />
             </div>
-            <input type="range" min={0} max={100} step={5} value={DEVELOPMENT_ADDRESS ? devPercent : 0} disabled={!DEVELOPMENT_ADDRESS || !chosen.length}
+            <input type="range" min={0} max={100} step={5} value={dev ? devPercent : 0} disabled={!dev || !chosen.length}
               onChange={(e) => setDevPercent(Number(e.target.value))} aria-label="Share for development" />
-            {!DEVELOPMENT_ADDRESS && <p className="tiny muted">The development fund isn’t accepting donations yet, so everything goes to relays.</p>}
+            {!dev && <p className="tiny muted">The development fund isn’t accepting donations yet, so everything goes to relays.</p>}
+            {dev && recipients?.length === 0 && <p className="tiny muted">No relays accept donations yet, so it all goes to development for now. Anyone can run one: Create → Become a relay.</p>}
           </div>
           <div className="stack">
             <strong>Relays that receive your share</strong>

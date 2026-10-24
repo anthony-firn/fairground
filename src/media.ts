@@ -24,14 +24,17 @@ export interface MediaItem {
   title?: string;
   description: string;
   images: string[];
-  video?: { url: string; poster?: string; duration?: number; width?: number; height?: number };
-  audio?: { url: string; type?: string; duration?: number };
+  /** `url` plays directly; `hls`, when present, is an adaptive stream of the same video. */
+  video?: { url: string; hls?: string; poster?: string; duration?: number; width?: number; height?: number };
+  audio?: { url: string; type?: string; duration?: number; hls?: string };
 }
 
 const URL_RE = /https:\/\/[^\s<>"']+/g;
 const IMAGE = /\.(jpe?g|png|gif|webp|avif)(\?\S*)?$/i;
 const VIDEO = /\.(mp4|webm|mov|m3u8)(\?\S*)?$/i;
 const AUDIO = /\.(mp3|m4a|aac|ogg|oga|opus|flac|wav)(\?\S*)?$/i;
+/** HTTP Live Streaming playlists. */
+export const HLS = /\.m3u8(\?\S*)?$/i;
 
 /** NIP-92 `imeta`: space-separated "key value" entries. */
 export function parseImeta(t: string[]): Record<string, string[]> {
@@ -59,26 +62,32 @@ export function toMedia(ev: Event): MediaItem | undefined {
     return images.length ? { event: ev, kind: 'photo', title, description: ev.content, images } : undefined;
   }
   if ([21, 22, 34235, 34236].includes(ev.kind)) {
-    const variant = imetas.find((m) => httpsOnly(m.url?.[0]) && (m.m?.[0] ?? 'video/mp4').startsWith('video/') && !m.url![0].endsWith('.m3u8')) ?? imetas[0];
+    const playable = imetas.filter((m) => httpsOnly(m.url?.[0]));
+    const isHls = (m: Record<string, string[]>) => HLS.test(m.url![0]) || /mpegurl/i.test(m.m?.[0] ?? '');
+    // A progressive file plays everywhere and shows a frame as a thumbnail; HLS adapts to the connection.
+    const file = playable.find((m) => !isHls(m) && (m.m?.[0] ?? 'video/mp4').startsWith('video/'));
+    const stream = playable.find(isHls);
+    const variant = file ?? stream ?? imetas[0];
     const url = httpsOnly(variant?.url?.[0]);
     if (!url) return undefined;
     const short = ev.kind === 22 || ev.kind === 34236;
     return {
       event: ev, kind: short ? 'short' : 'video', title, description: ev.content, images: [],
-      video: { url, poster: httpsOnly(variant.image?.[0]), duration: Number(variant.duration?.[0]) || undefined, ...dims(variant.dim?.[0]) },
+      video: { url, ...(stream && stream !== variant ? { hls: stream.url![0] } : HLS.test(url) ? { hls: url } : {}), poster: httpsOnly(variant.image?.[0] ?? stream?.image?.[0]), duration: Number(variant.duration?.[0]) || undefined, ...dims(variant.dim?.[0]) },
     };
   }
   if (ev.kind === 54) {
     const [, url, type] = tag(ev, 'audio') ?? [];
     if (!httpsOnly(url)) return undefined;
     const image = httpsOnly(tagValue(ev, 'image'));
-    return { event: ev, kind: 'audio', title, description: tagValue(ev, 'description') ?? ev.content, images: image ? [image] : [], audio: { url: url!, type } };
+    const duration = Number(tagValue(ev, 'duration')) || undefined;
+    return { event: ev, kind: 'audio', title, description: ev.content || tagValue(ev, 'description') || '', images: image ? [image] : [], audio: { url: url!, type, ...(duration ? { duration } : {}), ...(tagValue(ev, 'hls')?.startsWith('https://') ? { hls: tagValue(ev, 'hls') } : {}) } };
   }
   if (ev.kind === 1) {
     const urls = ev.content.match(URL_RE) ?? [];
     const text = ev.content.replace(URL_RE, '').trim();
-    const video = urls.find((u) => VIDEO.test(u) && !u.endsWith('.m3u8'));
-    if (video) return { event: ev, kind: 'video', description: text, images: [], video: { url: video } };
+    const video = urls.find((u) => VIDEO.test(u) && !HLS.test(u)) ?? urls.find((u) => HLS.test(u));
+    if (video) return { event: ev, kind: 'video', description: text, images: [], video: { url: video, ...(HLS.test(video) ? { hls: video } : {}) } };
     const audio = urls.find((u) => AUDIO.test(u));
     if (audio) return { event: ev, kind: 'audio', description: text, images: urls.filter((u) => IMAGE.test(u)), audio: { url: audio } };
     const images = urls.filter((u) => IMAGE.test(u));

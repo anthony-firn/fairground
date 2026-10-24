@@ -16,6 +16,8 @@ import { Orders } from './screens/Orders.tsx';
 import { PostDetail } from './screens/PostDetail.tsx';
 import { ListenScreen, MediaDetail, PhotosScreen, ShortsScreen, VideosScreen } from './screens/Media.tsx';
 import { Search } from './screens/Search.tsx';
+import { EpisodeEditor, ShowEditor, ShowPage } from './screens/Podcast.tsx';
+import { CampaignBuilder, CampaignPage } from './screens/Campaigns.tsx';
 import { Create, MediaKitScreen, SupportPageScreen } from './screens/Create.tsx';
 import { Home } from './screens/Home.tsx';
 import { Profile } from './screens/Profile.tsx';
@@ -113,6 +115,12 @@ export function App() {
   else if (path === '/create/support') screen = <SupportPageScreen />;
   else if (path === '/create/survey') screen = <SurveyScreen />;
   else if (path === '/promote') screen = <Promote query={query} />;
+  else if (path === '/promote/campaign/new') screen = <CampaignBuilder />;
+  else if (/^\/promote\/campaign\/[a-z0-9-]+$/.test(path)) screen = <CampaignPage key={path} slug={path.split('/')[3]} />;
+  else if (path === '/podcast/new') screen = <ShowEditor />;
+  else if (/^\/podcast\/edit\/[A-Za-z0-9_-]+$/.test(path)) screen = <ShowEditor key={path} slug={path.split('/')[3]} />;
+  else if (/^\/show\/npub1[a-z0-9]+\/[A-Za-z0-9_-]+\/new$/.test(path)) screen = <EpisodeEditor key={path} npub={path.split('/')[2]} slug={path.split('/')[3]} />;
+  else if (/^\/show\/npub1[a-z0-9]+\/[A-Za-z0-9_-]+$/.test(path)) screen = <ShowPage key={path} npub={path.split('/')[2]} slug={path.split('/')[3]} />;
   else if (path === '/relay') screen = <RelayScreen />;
   else if (path === '/you') screen = <You />;
   else if (path === '/feed') screen = <FeedSettings />;
@@ -124,9 +132,9 @@ export function App() {
   else screen = <Home />;
 
   const wide = ['/videos', '/market', '/photos', '/search'].includes(path) || ['/media/', '/l/', '/s/'].some((p) => path.startsWith(p));
-  const tab = ['/photos', '/videos', '/shorts', '/listen'].includes(path) || path.startsWith('/media/') ? '/' : TABS.slice().reverse().find((t) => (t.path === '/' ? path === '/' : path.startsWith(t.path)))?.path
+  const tab = ['/photos', '/videos', '/shorts', '/listen'].includes(path) || path.startsWith('/media/') || path.startsWith('/show/') ? '/' : TABS.slice().reverse().find((t) => (t.path === '/' ? path === '/' : path.startsWith(t.path)))?.path
     ?? (['/feed', '/account', '/relays', '/supporting', '/about', '/orders', '/messages'].includes(path) || path.startsWith('/messages/') ? '/you'
-      : path.startsWith('/promote') || path === '/relay' ? '/create'
+      : path.startsWith('/promote') || path.startsWith('/podcast') || path === '/relay' ? '/create'
         : path.startsWith('/l/') || path.startsWith('/s/') ? '/market' : '');
 
   return (

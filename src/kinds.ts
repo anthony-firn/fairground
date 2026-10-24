@@ -12,6 +12,7 @@ export const KIND = {
   answer: 3478,
   review: 3479,
   credential: 3480,
+  approval: 3481,
   comment: 1111,
   reaction: 7,
   report: 1984,
@@ -21,6 +22,9 @@ export const KIND = {
   feedRecipe: 33475,
   mediaKit: 33476,
   store: 33477,
+  show: 33478,
+  campaign: 33479,
+  placement: 33480,
   offer: 33470,
 } as const;
 

@@ -7,6 +7,7 @@ import type { Event } from 'nostr-tools/pure';
 import { buildThread, countComments, createComment, createVote, threadFilters, type Sort, type ThreadNode, type Vote } from '@core/comments.ts';
 import { KIND } from '@core/kinds.ts';
 import { useApp } from '../context.ts';
+import { useMembership } from '../lib/members.ts';
 import { timeAgo } from '../lib/format.ts';
 import { publish, query, subscribe } from '../lib/net.ts';
 import { allowed, safetySettings } from '../lib/safety.ts';
@@ -94,10 +95,11 @@ export function Thread({ root }: { root: Event }) {
     query({ kinds: [KIND.reaction], '#e': ids.split(',') }, 3000).then(setReactions, () => undefined);
   }, [ids]);
 
+  const members = useMembership(comments.map((c) => c.pubkey));
   const settings = safetySettings();
   const follows = new Set(load<string[]>('follows', []));
   const muted = new Set(load<string[]>('muted', []));
-  const visible = comments.filter((c) => allowed(c, { ...settings, allLanguages: true }, follows.has(c.pubkey)));
+  const visible = comments.filter((c) => !!members?.has(c.pubkey) && allowed(c, { ...settings, allLanguages: true }, follows.has(c.pubkey)));
   const thread = useMemo(() => buildThread(root, visible, reactions, sort, { me: account.pubkey, muted }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [root, comments, reactions, sort, account.pubkey]);

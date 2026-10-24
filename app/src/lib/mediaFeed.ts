@@ -1,6 +1,6 @@
 /**
  * The feed for one media format (photos, videos, shorts or listening). Same sources, safety rules and ranking as the
- * home feed: people the reader follows and the starting network, through allowed(), ranked by the reader's recipe.
+ * home feed: Fairground accounts, through allowed(), ranked by the reader's recipe.
  */
 import { useEffect, useRef, useState } from 'react';
 import type { Event } from 'nostr-tools/pure';
@@ -10,7 +10,8 @@ import { repeats } from '@core/safety.ts';
 import { currentRecipe } from './feedEngine.ts';
 import { rememberProfile } from './hooks.ts';
 import { query, subscribeAttributed } from './net.ts';
-import { allowed, loadNetwork, safetySettings } from './safety.ts';
+import { allowed, safetySettings } from './safety.ts';
+import { authorChunks, loadMembers } from './members.ts';
 import { load } from './storage.ts';
 
 export function useMediaFeed(kind: Exclude<MediaKind, 'post'>, recipeVersion: number): { items: MediaItem[]; ready: boolean } {
@@ -24,16 +25,12 @@ export function useMediaFeed(kind: Exclude<MediaKind, 'post'>, recipeVersion: nu
     setReady(false);
     const closers: (() => void)[] = [];
     (async () => {
-      const network = await loadNetwork().catch(() => new Set<string>());
+      const network = await loadMembers().catch(() => new Set<string>());
       const settings = safetySettings();
       const follows = new Set(load<string[]>('follows', []));
       const kinds = [...MEDIA_KINDS[kind], 1];
       const add = (ev: Event) => events.current.set(ev.id, ev);
-      if (settings.unvetted || !network.size) closers.push(subscribeAttributed({ kinds, limit: 300 }, add));
-      else {
-        const members = [...new Set([...follows, ...network])];
-        for (let i = 0; i < members.length; i += 700) closers.push(subscribeAttributed({ kinds, authors: members.slice(i, i + 700), limit: 120 }, add));
-      }
+      for (const authors of authorChunks(network)) closers.push(subscribeAttributed({ kinds, authors, limit: 200 }, add));
       await new Promise((r) => setTimeout(r, 1800));
       const authors = [...new Set([...events.current.values()].map((e) => e.pubkey))].slice(0, 300);
       (await query({ kinds: [0], authors }, 2500)).forEach(rememberProfile);
@@ -44,7 +41,7 @@ export function useMediaFeed(kind: Exclude<MediaKind, 'post'>, recipeVersion: nu
         if (repeated.has(ev.id) || ev.tags.some((t) => t[0] === 'e' && (!t[3] || t[3] === 'reply' || t[3] === 'root'))) return false;
         const known = follows.has(ev.pubkey);
         if (!allowed(ev, settings, known)) return false;
-        if (!known && !settings.unvetted && network.size && !network.has(ev.pubkey)) return false;
+        if (!network.has(ev.pubkey)) return false;
         return toMedia(ev)?.kind === kind;
       });
       const ranked = rankFeed(candidates, { ...currentRecipe(), sources: { follows: true, trusted: true, everyone: true, topics: [] } }, {

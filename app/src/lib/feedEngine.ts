@@ -1,6 +1,6 @@
 /**
- * The home feed. Within a couple of seconds it shows posts from the people the reader follows and, for strangers, the
- * starting network (accounts followed by long-standing seeds), ranked by the reader's recipe, then refines itself on
+ * The home feed. Within a couple of seconds it shows posts from Fairground accounts (never the wider Nostr network),
+ * ranked by the reader's recipe, with the people they follow and their topics weighing in, then refines itself on
  * the device: engagement from reactions, trust from the people the reader follows, and the AI model once it has
  * loaded. Everything passes the safety rules in safety.ts first. Reordering only happens near the top of the page or
  * when the reader asks, so the feed never jumps.
@@ -23,7 +23,8 @@ import type { Account } from './account.ts';
 import { rememberProfile } from './hooks.ts';
 import { currentEmbedder } from './model.ts';
 import { repeats } from '@core/safety.ts';
-import { allowed, loadNetwork, safetySettings } from './safety.ts';
+import { allowed, safetySettings } from './safety.ts';
+import { authorChunks, loadMembers } from './members.ts';
 import { learnLanguage } from './language.ts';
 import { markSeen, publish, query, subscribe, subscribeAttributed } from './net.ts';
 import { load, save } from './storage.ts';
@@ -65,7 +66,7 @@ export function useFeed(account: Account, recipeVersion: number): Feed {
   const [network, setNetwork] = useState<Set<string> | null>(null);
 
   useEffect(() => {
-    loadNetwork().then(setNetwork, () => setNetwork(new Set()));
+    loadMembers().then(setNetwork, () => setNetwork(new Set([account.pubkey])));
   }, [recipeVersion]);
 
   const interests = () => {
@@ -82,9 +83,8 @@ export function useFeed(account: Account, recipeVersion: number): Feed {
       if (hidden.has(ev.id) || repeated.has(ev.id) || !isTopLevel(ev) || ev.content.length > 3000) return false;
       const known = ev.pubkey === account.pubkey || follows.has(ev.pubkey);
       if (!allowed(ev, settings, known)) return false;
-      if (known || (trust.current.get(ev.pubkey) ?? 0) > 0) return true;
-      // Strangers must be in the starting network, which keeps new spam and abuse accounts out of a newcomer's feed.
-      return settings.unvetted || !network?.size || network.has(ev.pubkey);
+      // Fairground is its own network: only its accounts appear, never the wider Nostr network.
+      return ev.pubkey === account.pubkey || !!network?.has(ev.pubkey);
     });
     const engagement = new Map([...reactors.current].map(([id, set]) => [id, set.size]));
     const now = Math.floor(Date.now() / 1000);
@@ -98,7 +98,7 @@ export function useFeed(account: Account, recipeVersion: number): Feed {
 
   const nearTop = () => window.scrollY < 120;
 
-  // Sources: the starting network (or, if the reader opts in, everyone), the people they follow, and their topics.
+  // Sources: everyone on Fairground (the people the reader follows and their topics weigh in the ranking).
   useEffect(() => {
     if (!network) return;
     let cancelled = false;
@@ -109,13 +109,10 @@ export function useFeed(account: Account, recipeVersion: number): Feed {
       if (snapshotAt.current && ev.created_at > snapshotAt.current) setNewCount((n) => n + 1);
     };
     const closers: (() => void)[] = [];
-    if (safetySettings().unvetted || !network.size) closers.push(subscribeAttributed({ kinds: [1], limit: 250 }, add));
-    else {
-      const members = [...network];
-      for (let i = 0; i < members.length; i += 700) closers.push(subscribeAttributed({ kinds: [1], authors: members.slice(i, i + 700), limit: 60 }, add));
+    for (const authors of authorChunks(network)) {
+      closers.push(subscribeAttributed({ kinds: [1], authors, limit: 250 }, add));
+      if (recipe.sources.topics.length) closers.push(subscribeAttributed({ kinds: [1], authors, '#t': recipe.sources.topics, limit: 150 }, add));
     }
-    if (follows.size) closers.push(subscribeAttributed({ kinds: [1], authors: [...follows].slice(0, 500), limit: 150 }, add));
-    if (recipe.sources.topics.length) closers.push(subscribeAttributed({ kinds: [1], '#t': recipe.sources.topics, limit: 150 }, add));
 
     (async () => {
       await new Promise((r) => setTimeout(r, 1500));

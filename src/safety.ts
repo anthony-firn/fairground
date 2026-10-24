@@ -9,8 +9,8 @@
  * - Hidden by default: slurs and threats (a separate setting), spam, junk and self-declared bots.
  * - Posts in scripts the reader doesn't read are left out by default.
  *
- * The term lists below exist only to recognise abuse; they are not exhaustive, and the reputation gate in the feed
- * (strangers must be followed by the starting network) does most of the work against new spam accounts.
+ * The term lists below exist only to recognise abuse; they are not exhaustive. Showing only Fairground accounts (see
+ * network.ts) keeps out the spam and abuse that circulate on the wider Nostr network.
  */
 import type { Event } from 'nostr-tools/pure';
 
@@ -129,36 +129,4 @@ export function repeats(events: Event[]): Set<string> {
     else seen.add(key);
   }
   return out;
-}
-
-/**
- * Long-standing, widely followed Nostr accounts whose follows form the starting network: for a reader who follows no
- * one yet, strangers must be followed by one of these to appear in "For you". Identities checked against their NIP-05
- * addresses in October 2026. Readers can change the list, or turn the gate off, in settings.
- */
-export const SEED_ACCOUNTS: { name: string; pubkey: string }[] = [
-  { name: 'jack', pubkey: '82341f882b6eabcd2ba7f1ef90aad961cf074af15b9ef44a09f9d2a8fbfbe6a2' },
-  { name: 'fiatjaf', pubkey: '3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d' },
-  { name: 'jb55', pubkey: '32e1827635450ebb3c5a7d12c1f8e7b2b514439ac10a67eef3d9fd9c5c68e245' },
-  { name: 'ODELL', pubkey: '04c915daefee38317fa734444acee390a8269fe5810b2241e5e6dd343dfbecc9' },
-  { name: 'Gigi', pubkey: '6e468422dfb74a5738702a8823b9b28168abab8655faacb6853cd0ee15deee93' },
-  { name: 'pablof7z', pubkey: 'fa984bd7dbb282f07e16e7ae87b26a2a7b9b90b7246a44771f0cf5ae58018f52' },
-  { name: 'hodlbod', pubkey: '97c70a44366a6535c145b333f973ea86dfdc2d7a99da618c40c64705ad98e322' },
-  { name: 'Vitor Pamplona', pubkey: '460c25e682fda7832b52d1f22d3d22b3176d972f60dcdc3212ed8c92ef85065c' },
-  { name: 'Derek Ross', pubkey: '3f770d65d3a764a9c5cb503ae123e62ec7598ad035d836e2a810f3877a745b24' },
-  { name: 'Lyn Alden', pubkey: 'eab0e756d32b80bcd464f3d844b8040303075a13eabc3599a762c9ac7ab91f4f' },
-  { name: 'miljan', pubkey: 'd61f3bc5b3eb4400efdae6169a5c17cabf3246b514361de939ce4a1a0da6ef4a' },
-];
-
-/** The starting network: the seed accounts and everyone they follow, from their contact lists (kind 3). */
-export function networkFrom(contactLists: Event[], seeds: string[]): Set<string> {
-  const network = new Set(seeds);
-  const newest = new Map<string, Event>();
-  for (const ev of contactLists) {
-    if (ev.kind !== 3 || !seeds.includes(ev.pubkey)) continue;
-    const prev = newest.get(ev.pubkey);
-    if (!prev || ev.created_at > prev.created_at) newest.set(ev.pubkey, ev);
-  }
-  for (const list of newest.values()) for (const t of list.tags) if (t[0] === 'p' && /^[0-9a-f]{64}$/.test(t[1] ?? '')) network.add(t[1]);
-  return network;
 }

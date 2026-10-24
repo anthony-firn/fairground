@@ -45,6 +45,7 @@ export async function startFixtureRelay(port: number): Promise<DevRelay & { crea
   });
   // One of each media format, and a post in another language that an English reader shouldn't see by default.
   const mediaKey = generateSecretKey();
+  store(createPqBinding(mediaKey, generatePqKeys(), undefined, t - 86400 * 30));
   store(finalizeEvent({ kind: 0, created_at: t - 86400, tags: [], content: JSON.stringify({ name: 'Test media creator' }) }, mediaKey));
   store(createPhotoPost(mediaKey, { title: 'Test photo set', description: 'Test photos #art', images: [{ url: `${MEDIA}/photo1.jpg`, dim: '640x480' }, { url: `${MEDIA}/photo2.jpg` }], created_at: t - 1200 }));
   store(finalizeEvent({ kind: 1, created_at: t - 1300, content: `Test post with a photo #art ${MEDIA}/photo3.jpg`, tags: [['t', 'art']] }, mediaKey));
@@ -60,6 +61,7 @@ export async function startFixtureRelay(port: number): Promise<DevRelay & { crea
   }
   // Posts the feed must never show (abuse) or show only with safe search off (adult); synthetic test strings.
   const unsafeKey = generateSecretKey();
+  store(createPqBinding(unsafeKey, generatePqKeys(), undefined, t - 86400 * 30));
   store(finalizeEvent({ kind: 0, created_at: t - 86400, tags: [], content: JSON.stringify({ name: 'Test unsafe account' }) }, unsafeKey));
   store(finalizeEvent({ kind: 1, created_at: t - 60, content: 'Test abuse fixture: teen nude content t.me/x', tags: [] }, unsafeKey));
   store(finalizeEvent({ kind: 1, created_at: t - 61, content: 'Test adult fixture #nsfw', tags: [['t', 'nsfw']] }, unsafeKey));
@@ -89,5 +91,10 @@ export async function startFixtureRelay(port: number): Promise<DevRelay & { crea
     slug: 'test-offer', title: 'Test offer', brief: 'Test brief.', rail: RAIL, deadline: t + 86400 * 14, created_at: t - 3600,
     price: { amount: parseUsd('150'), currency: 'USD', index: FIXED_INDEX, basePeriod: month() },
   }));
+  // Someone on the wider Nostr network, not on Fairground: never shown.
+  const outsider = generateSecretKey();
+  store(finalizeEvent({ kind: 0, created_at: t - 86400, tags: [], content: JSON.stringify({ name: 'Test outsider' }) }, outsider));
+  store(finalizeEvent({ kind: 1, created_at: t - 30, content: 'Test outsider post #cooking', tags: [['t', 'cooking']] }, outsider));
+
   return { ...relay, creators, advertiser: getPublicKey(brandKey), shop };
 }

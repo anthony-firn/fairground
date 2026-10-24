@@ -22,8 +22,10 @@ import { newPrice, pqKeys, priceNow, useIndex } from '../lib/data.ts';
 import { nowSeconds, usd } from '../lib/format.ts';
 import { useEvents } from '../lib/hooks.ts';
 import { publish } from '../lib/net.ts';
+import { useMembership } from '../lib/members.ts';
+import { CampaignList } from './Campaigns.tsx';
 
-type Tab = 'new' | 'offers' | 'creators';
+type Tab = 'campaigns' | 'new' | 'offers' | 'creators';
 
 function NewOffer({ to, rate, onDone }: { to?: string; rate?: string; onDone: () => void }) {
   const { account, toast } = useApp();
@@ -138,7 +140,7 @@ function MyOffers() {
     <div className="stack">
       {loading && !acceptances.length && <div className="skeleton" />}
       {!loading && !acceptances.length && <p className="muted center">{offers.length ? `${offers.length} open offers. Nobody has accepted yet.` : 'No offers yet.'}</p>}
-      {acceptances.map((acc) => (
+      {acceptances.filter((acc) => !acceptedOffer(acc)?.tags.some((t) => t[0] === 'a')).map((acc) => (
         <AcceptanceRow key={acc.id} acceptance={acc}
           delivery={posts.find((p) => p.pubkey === acc.pubkey && markedEvent(p, 'sponsorship') === acc.id)}
           receipt={receipts.find((r) => markedEvent(r, 'acceptance') === acc.id)} />
@@ -155,7 +157,8 @@ function FindCreators({ onSponsor }: { onSponsor: (kit: MediaKit) => void }) {
   useEffect(() => {
     pqKeys(events.map((e) => e.pubkey)).then((lookup) => setKits(events.map((e) => parseMediaKit(e, lookup)).filter((k): k is MediaKit => !!k)), () => undefined);
   }, [events]);
-  const shown = kits.filter((k) => !topic || k.topics.includes(topic.toLowerCase().replace(/^#/, '')));
+  const members = useMembership(events.map((e) => e.pubkey));
+  const shown = kits.filter((k) => members?.has(k.creator) && (!topic || k.topics.includes(topic.toLowerCase().replace(/^#/, ''))));
   return (
     <div className="stack">
       <input type="text" placeholder="Filter by topic, e.g. running" value={topic} onChange={(e) => setTopic(e.target.value)} />
@@ -166,7 +169,8 @@ function FindCreators({ onSponsor }: { onSponsor: (kit: MediaKit) => void }) {
           <div className="row between"><strong><Name pubkey={k.creator} /></strong><span>{usd(priceNow(k.rate, index).amount)} / post</span></div>
           <p className="small" style={{ margin: 0 }}>{k.pitch}</p>
           {k.topics.length > 0 && <p className="small muted" style={{ margin: 0 }}>{k.topics.map((t) => `#${t}`).join(' ')}</p>}
-          {k.survey && <p className="tiny muted" style={{ margin: 0 }}>Has an anonymous audience survey</p>}
+          <p className="tiny muted" style={{ margin: 0 }}>{[...(k.formats ?? []).map((f) => (f === 'podcast' ? 'Podcast reads' : f === 'video' ? 'Video reads' : 'Posts')),
+            ...(k.audience ? [`${k.audience.toLocaleString()} per episode or post`] : []), ...(k.survey ? ['anonymous audience survey'] : [])].join(' · ')}</p>
           <button type="button" className="btn primary small" onClick={() => onSponsor(k)}>Sponsor</button>
         </div>
       ))}
@@ -178,13 +182,14 @@ export function Promote({ query: q }: { query: URLSearchParams }) {
   const { navigate } = useApp();
   const index = useIndex();
   const to = q.get('to') ?? undefined;
-  const [tab, setTab] = useState<Tab>(to ? 'new' : 'offers');
+  const [tab, setTab] = useState<Tab>(to ? 'new' : 'campaigns');
   const [target, setTarget] = useState<{ to?: string; rate?: string }>({ to });
   return (
     <>
       <TopBar title="Advertise" back={() => history.back()} />
       <div className="page">
-        <Segmented value={tab} onChange={setTab} options={[['offers', 'Your offers'], ['new', 'New offer'], ['creators', 'Find creators']]} />
+        <Segmented value={tab} onChange={setTab} options={[['campaigns', 'Campaigns'], ['offers', 'Quick offers'], ['new', 'New offer'], ['creators', 'Creators']]} />
+        {tab === 'campaigns' && <CampaignList />}
         {tab === 'new' && <NewOffer key={`${target.to}-${target.rate}`} to={target.to} rate={target.rate} onDone={() => (setTab('offers'), navigate('/promote'))} />}
         {tab === 'offers' && <MyOffers />}
         {tab === 'creators' && <FindCreators onSponsor={(k) => (setTarget({ to: k.creator, rate: formatUsd(priceNow(k.rate, index).amount) }), setTab('new'))} />}

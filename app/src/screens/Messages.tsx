@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { parseOrder, parseOrderUpdate, parseQuote } from '@core/commerce.ts';
 import { Avatar, Name, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
+import { useMembership } from '../lib/members.ts';
 import { sendMessage, useMessages, type Message } from '../lib/dm.ts';
 import { timeAgo, usd } from '../lib/format.ts';
 import { isBlocked } from '../lib/safety.ts';
@@ -14,7 +15,9 @@ import { useAcceptQuote } from './Market.tsx';
 
 export function Conversations() {
   const { account, navigate } = useApp();
-  const messages = useMessages();
+  const all = useMessages();
+  const members = useMembership(all.map((m) => m.from));
+  const messages = all.filter((m) => m.from === account.pubkey || !!members?.has(m.from));
   const muted = new Set(load<string[]>('muted', []));
   const latest = new Map<string, Message>();
   for (const m of messages) {

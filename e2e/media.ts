@@ -36,7 +36,6 @@ async function person(viewport: { width: number; height: number }): Promise<{ pa
   await serveMedia(ctx);
   await ctx.addInitScript(() => {
     localStorage.setItem('fairground.model', JSON.stringify({ kind: 'off' }));
-    localStorage.setItem('fairground.searchRelays', JSON.stringify(['ws://localhost:7793']));
   });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(e.message));
@@ -61,9 +60,10 @@ try {
   assert.ok(!(await page.locator('.format-bar').isVisible()), 'formats live in the sidebar on desktop');
   await shot(page, 'desktop-home');
 
-  step('posts in another language stay out of an English reader’s feed');
+  step('posts in another language, and from outside Fairground, stay out of the feed');
   const feed = await page.locator('article.post').allInnerTexts();
   assert.ok(!feed.some((t) => t.includes('Publicación de prueba')));
+  assert.ok(!feed.some((t) => t.includes('Test outsider')), 'Fairground is its own network');
   assert.ok(feed.some((t) => t.includes('Test post with a photo')));
 
   step('photos: photo posts and posts with photos, in a grid');
