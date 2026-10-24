@@ -114,6 +114,8 @@ export function createFakeChain(origins: { algod: string; indexer: string } = { 
     if (url.origin === origins.algod) {
       if (path === '/v2/transactions/params') return ok({ 'min-fee': 1000, fee: 0, 'last-round': round, 'genesis-id': 'mainnet-v1.0', 'genesis-hash': MAINNET_GENESIS_HASH, 'consensus-version': 'test' });
       const acct = /^\/v2\/accounts\/([A-Z2-7]{58})$/.exec(path);
+      // Like algod: `exclude` accepts only "all" or "none".
+      if (acct && url.searchParams.has('exclude') && !['all', 'none'].includes(url.searchParams.get('exclude')!)) return fail(400, 'invalid exclude');
       if (acct) {
         const a = accounts.get(acct[1]) ?? { algo: 0n, usdc: null };
         return ok({ address: acct[1], amount: Number(a.algo), 'min-balance': Number(minimum(a)), assets: a.usdc === null ? [] : [{ 'asset-id': USDC_ASSET_ID, amount: Number(a.usdc), 'is-frozen': false }] });
