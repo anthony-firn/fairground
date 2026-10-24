@@ -17,7 +17,8 @@ import { finalizeEvent, getPublicKey, verifyEvent, type Event, type EventTemplat
 import { KIND, PROTOCOL } from './kinds.ts';
 import { byTime, markedEvent, now, tagValue } from './tags.ts';
 
-export const PQ_ALG = 'ml-dsa-65';
+export { PQ_ALG } from './kinds.ts';
+import { PQ_ALG } from './kinds.ts';
 const CONTEXT = utf8ToBytes(PROTOCOL);
 const PQ_TAGS = new Set(['pq', 'pq-prev']);
 

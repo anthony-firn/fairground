@@ -28,5 +28,8 @@ export const KIND = {
   offer: 33470,
 } as const;
 
+/** The post-quantum signature algorithm in key bindings. */
+export const PQ_ALG = 'ml-dsa-65';
+
 /** Domain-separation string for every post-quantum signature Fairground makes. */
 export const PROTOCOL = 'fairground/v1';

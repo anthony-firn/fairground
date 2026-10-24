@@ -10,15 +10,18 @@
 import { decode, npubEncode } from 'nostr-tools/nip19';
 import type { Filter } from 'nostr-tools/filter';
 import { verifyEvent, type Event } from 'nostr-tools/pure';
-import { breaksFor, parsePlacement, type AdBreak, type Placement } from './ads.ts';
+import type { AdBreak, Placement } from './ads.ts';
 import { KIND } from './kinds.ts';
 import { canJoin } from './mp3.ts';
 import { currentEpisodes, parseShow, renderRss, showAddress, type Episode, type Show } from './podcast.ts';
 import { verifyAuthHeader } from './httpauth.ts';
 import { membersFrom } from './network.ts';
 import { createRamp, sellOrderProblem, type RampOptions } from './ramp.ts';
-import { createStarter, type StarterOptions } from './starter.ts';
-import { keyLookup } from './pq.ts';
+import type { StarterOptions } from './starter.ts';
+
+// Loaded on first use: an edge function must start within a few tens of milliseconds, and most requests are feeds.
+const ads = () => import('./ads.ts');
+const pq = () => import('./pq.ts');
 import { assess } from './safety.ts';
 
 export interface GatewayOptions {
@@ -241,7 +244,7 @@ export function createGateway(opts: GatewayOptions): (req: Request, info?: Reque
     const episodes = currentEpisodes(episodeEvents.filter((e) => !assess(e).block), address);
     // Podcast apps require an accurate explicit flag.
     if (!show.explicit && [show.event, ...episodes.map((e) => e.event)].some((e) => { const v = assess(e); return !v.block && v.hide === 'sexual'; })) show.explicit = true;
-    const placements = placementEvents.map(parsePlacement).filter((p): p is Placement => !!p);
+    const placements = placementEvents.length ? placementEvents.map((await ads()).parsePlacement).filter((p): p is Placement => !!p) : [];
     const [acceptances, approvals, bindings] = placements.length
       ? await Promise.all([
         q({ ids: [...new Set(placements.map((p) => p.acceptanceId))] }),
@@ -263,7 +266,8 @@ export function createGateway(opts: GatewayOptions): (req: Request, info?: Reque
   }
 
   const notFound = (what: string) => new Response(`${what} not found\n`, { status: 404, headers: { ...cors, 'Content-Type': 'text/plain' } });
-  const starter = opts.starter && createStarter({ fetch: fetchImpl, ...opts.starter });
+  let starterP: Promise<ReturnType<typeof import('./starter.ts')['createStarter']>> | undefined;
+  const starter = () => (opts.starter ? (starterP ??= import('./starter.ts').then((m) => m.createStarter({ fetch: fetchImpl, ...opts.starter! }))) : undefined);
   const ramp = opts.ramp && createRamp({ fetch: fetchImpl, ...opts.ramp });
   const reply = (body: unknown, status = 200) => Response.json(body, { status, headers: { ...cors, 'Cache-Control': 'no-store' } });
 
@@ -278,14 +282,14 @@ export function createGateway(opts: GatewayOptions): (req: Request, info?: Reque
 
   /** The built-in wallet's services: starting a wallet, and buying and selling USDC. */
   async function money(req: Request, path: string, info: RequestInfo): Promise<Response | undefined> {
-    if (path === '/wallet/config' && req.method === 'GET') return reply({ starter: starter?.sponsor ?? null, ramp: !!ramp });
+    if (path === '/wallet/config' && req.method === 'GET') return reply({ starter: (await starter())?.sponsor ?? null, ramp: !!ramp });
     if (path === '/wallet/start' && req.method === 'POST') {
-      if (!starter) return reply({ error: 'this gateway doesn’t start wallets' }, 503);
+      const s = await starter();
+      if (!s) return reply({ error: 'this gateway doesn’t start wallets' }, 503);
       const body = await req.text();
       const who = await member(req, body);
       if (who instanceof Response) return who;
-      const { optIn } = JSON.parse(body || '{}') as { optIn?: string };
-      const result = await starter.start(who, optIn ?? '').catch((e: Error) => ({ status: 502, error: e.message }));
+      const result = await s.start(who, JSON.parse(body || '{}')).catch((e: Error) => ({ status: 502, error: e.message }));
       return 'txid' in result ? reply(result) : reply({ error: result.error }, result.status);
     }
     if (path === '/ramp/session' && req.method === 'POST') {
@@ -368,10 +372,10 @@ export function createGateway(opts: GatewayOptions): (req: Request, info?: Reque
     const guid = decodeURIComponent(route[3]);
     const episode = data.episodes.find((e) => e.guid === guid);
     if (!episode) return notFound('episode');
-    const breaks = breaksFor(
+    const breaks = !data.placements.length ? [] : (await ads()).breaksFor(
       { creator, kind: 'audio', show: data.show.address, duration: episode.audio.duration, marks: episode.breaks ?? [] },
       data.placements,
-      { now: clock(), acceptances: data.acceptances, approvals: data.approvals, pqKeyOf: keyLookup(data.bindings) },
+      { now: clock(), acceptances: data.acceptances, approvals: data.approvals, pqKeyOf: (await pq()).keyLookup(data.bindings) },
     );
     const segments = stitchPlan(episode, breaks);
     if (!segments) {

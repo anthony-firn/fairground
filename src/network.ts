@@ -6,8 +6,7 @@
  * which every Fairground account does on its first start, so the bindings on the relays are the member directory.
  */
 import type { Event } from 'nostr-tools/pure';
-import { KIND } from './kinds.ts';
-import { PQ_ALG } from './pq.ts';
+import { KIND, PQ_ALG } from './kinds.ts';
 import { tagValue } from './tags.ts';
 
 /** Base64 length of an ML-DSA-65 public key (1952 bytes). */

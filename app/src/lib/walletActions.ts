@@ -1,11 +1,13 @@
-/** Moving money with the built-in wallet. Loaded on demand: it carries the Algorand transaction library. */
+/** Moving money with the built-in wallet: payments signed on this device, and calls to the gateway. Loaded on demand. */
+import { ed25519 } from '@noble/curves/ed25519.js';
+import { base64 } from '@scure/base';
+import { signingBytes } from '@core/algotx.ts';
 import { authHeader } from '@core/httpauth.ts';
 import { algorandUsdc } from '@core/rails/algorand.ts';
 import type { PaymentRequest, Transfer } from '@core/rails/rail.ts';
 import type { RampOrder } from '@core/ramp.ts';
 import { starterTxns } from '@core/starter.ts';
-import { confirmed, submit, suggestedParams, usdcPayment, walletKeys } from '@core/wallet.ts';
-import { bytesToBase64 } from 'algosdk';
+import { confirmed, sign, submit, suggestedParams, usdcPayment, walletKeys } from '@core/wallet.ts';
 import type { Account } from './account.ts';
 import { gatewayUrl, walletChanged } from './wallet.ts';
 
@@ -23,15 +25,18 @@ async function call<T>(account: Account, path: string, method: 'GET' | 'POST', b
 /** Turns the wallet on: the project's sponsor sends the ALGO it needs and pays for the USDC opt-in signed here. */
 export async function startWallet(account: Account, sponsor: string): Promise<void> {
   const keys = walletKeys(account.nostrKey);
-  const [, optIn] = starterTxns(sponsor, keys.address, account.pubkey, await suggestedParams());
-  await call(account, '/wallet/start', 'POST', { optIn: bytesToBase64(optIn.signTxn(keys.secretKey)) });
+  const params = await suggestedParams();
+  const [, optIn] = starterTxns(sponsor, keys.address, account.pubkey, params);
+  await call(account, '/wallet/start', 'POST', {
+    address: keys.address, firstValid: String(params.firstValid), lastValid: String(params.lastValid), sig: base64.encode(ed25519.sign(signingBytes(optIn), keys.seed)),
+  });
   walletChanged();
 }
 
 /** Pays from the wallet: the same USDC transfer and memo a payment link would make, signed on this device. */
 export async function payFromWallet(account: Account, request: PaymentRequest): Promise<Transfer> {
   const keys = walletKeys(account.nostrKey);
-  const txid = await submit([usdcPayment(keys.address, request, await suggestedParams()).signTxn(keys.secretKey)]);
+  const txid = await submit([sign(usdcPayment(keys.address, request, await suggestedParams()), keys.seed)]);
   await confirmed(txid);
   walletChanged();
   // The indexer catches up a moment after the block; until then, describe the transfer ourselves.

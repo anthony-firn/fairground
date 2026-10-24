@@ -272,6 +272,7 @@ Store releases need signing keys and developer accounts, which aren't part of th
 | `src/mp3.ts` | MP3 frame layout, for splicing reads in without re-encoding |
 | `src/gateway.ts` | The gateway: podcast feeds, stitched downloads with Range support, wallet starts, Transak sessions, health |
 | `src/walletkey.ts`, `src/wallet.ts` | The built-in wallet: key derivation, balances, USDC payments signed on the device |
+| `src/algotx.ts` | The two Algorand transactions Fairground makes, encoded byte-for-byte as the network expects (checked against the Algorand SDK in tests) |
 | `src/starter.ts` | Starting new wallets: the sponsor's ALGO and the USDC opt-in in one group |
 | `src/ramp.ts` | Transak sessions and cash-out order checks |
 | `src/httpauth.ts` | Signed HTTP requests (NIP-98) to the gateway |

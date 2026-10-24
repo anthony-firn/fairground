@@ -9,6 +9,9 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import algosdk from 'algosdk';
+import { ed25519 } from '@noble/curves/ed25519.js';
+import { bytesToHex, randomBytes } from '@noble/hashes/utils.js';
+import { encodeAddressKey } from '../src/algotx.ts';
 import { chromium, type BrowserContext, type Page, type Route } from 'playwright';
 import { preview } from 'vite';
 import { DEFAULT_GATEWAY, DEVELOPMENT_ADDRESS } from '../src/defaults.ts';
@@ -28,8 +31,9 @@ const errors: string[] = [];
 const step = (name: string) => console.log(`- ${name}`);
 
 const chain = createFakeChain({ algod: DEFAULT_ALGOD, indexer: DEFAULT_INDEXER });
-const sponsor = algosdk.generateAccount();
-chain.fund(sponsor.addr.toString(), 10_000_000n);
+const sponsorSeed = randomBytes(32);
+const sponsor = { addr: encodeAddressKey(ed25519.getPublicKey(sponsorSeed)) };
+chain.fund(sponsor.addr, 10_000_000n);
 chain.fund(DEVELOPMENT_ADDRESS!, 200_000n, 0n);
 const transakDeposit = algosdk.generateAccount().addr.toString();
 chain.fund(transakDeposit, 200_000n, 0n);
@@ -46,7 +50,7 @@ const transak: typeof fetch = async (input) => {
 };
 const gw = createGateway({
   relays: [relay.url], base: '/fairground', appUrl: url, fetch: (i, init) => (String(i).includes('transak') ? transak(i, init) : chain.fetch(i, init)),
-  starter: { mnemonic: algosdk.secretKeyToMnemonic(sponsor.sk), algod: DEFAULT_ALGOD, indexer: DEFAULT_INDEXER },
+  starter: { key: bytesToHex(sponsorSeed), algod: DEFAULT_ALGOD, indexer: DEFAULT_INDEXER },
   ramp: { apiKey: 'key', apiSecret: 'secret', environment: 'staging', referrerDomain: 'localhost' },
 });
 
@@ -92,7 +96,7 @@ try {
   await go(fan.page, '/wallet');
   await fan.page.getByRole('button', { name: 'Turn on my wallet' }).click();
   await fan.page.getByRole('button', { name: 'Add money' }).waitFor({ timeout: 15000 });
-  const fanAddress = [...chain.accounts.keys()].find((a) => a !== sponsor.addr.toString() && a !== DEVELOPMENT_ADDRESS && a !== transakDeposit && chain.accounts.get(a)!.usdc !== null)!;
+  const fanAddress = [...chain.accounts.keys()].find((a) => a !== sponsor.addr && a !== DEVELOPMENT_ADDRESS && a !== transakDeposit && chain.accounts.get(a)!.usdc !== null)!;
   assert.equal(chain.accounts.get(fanAddress)!.algo, 250_000n);
   assert.equal(usdcOf(fanAddress), 0n);
 

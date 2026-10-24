@@ -27,12 +27,12 @@
     "@noble/hashes": "^2.4.0",
     "@noble/post-quantum": "^0.7.1",
     "@scure/base": "^2.4.0",
-    "algosdk": "^3.9.0",
     "nostr-tools": "^2.25.2"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/ws": "^8.18.2",
+    "algosdk": "^3.9.0",
     "fast-xml-parser": "^5.11.2",
     "playwright": "^1.64.1",
     "typescript": "^7.0.2",
