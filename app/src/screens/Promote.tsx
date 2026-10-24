@@ -63,7 +63,7 @@ function NewOffer({ to, rate, onDone }: { to?: string; rate?: string; onDone: ()
         <p className="card small row between"><span>For <strong><Name pubkey={creator} /></strong> only</span>
           <button type="button" className="btn ghost small" onClick={() => setCreator(undefined)}>Open to anyone</button></p>
       ) : <p className="small muted">Open to any creator. To pick one, use Sponsor on their profile or Find creators.</p>}
-      <Field label="Title"><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Our autumn trail shoe" /></Field>
+      <Field label="Title"><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What you’re promoting" /></Field>
       <Field label="What you’d like them to post about" hint="Creators post in their own words, and every sponsored post is labelled #ad.">
         <textarea value={brief} onChange={(e) => setBrief(e.target.value)} />
       </Field>

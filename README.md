@@ -115,8 +115,8 @@ npm test                  # protocol core: 79 unit tests
 npm run typecheck
 npm run app:dev           # the app on http://localhost:5173
 npm run app:build         # static build in app/dist
-node tools/demo-relay.ts  # a local relay with sample data; open the app with ?relay=ws://localhost:7777
-node e2e/smoke.ts         # end-to-end test of the built app in Chrome against the demo relay
+node tools/dev-relay.ts   # an empty local relay; open the app with ?relay=ws://localhost:7777
+node e2e/smoke.ts         # end-to-end test of the built app in Chrome, against labelled test fixtures
 ```
 
 The app reads public relays by default. `?relay=` (repeatable) points it elsewhere, and a build with
@@ -157,8 +157,8 @@ Store releases need signing keys and developer accounts, which aren't part of th
 | `src/rails/algorand.ts` | USDC on Algorand: addresses, opt-in checks, payment links, transfer verification |
 | `src/defaults.ts` | Default relays, index publisher and development address |
 | `app/` | The React app, its on-device model worker, and the Capacitor iOS and Android projects |
-| `tools/` | Dev relay, demo relay, CPI publisher |
-| `e2e/` | End-to-end smoke test and the demo-video recorder |
+| `tools/` | Dev relay and the CPI publisher |
+| `e2e/` | End-to-end smoke test, its test fixtures, and the demo-video recorder (real posts only) |
 | `docs/protocol.md` | Event formats and verification rules |
 
 ## License

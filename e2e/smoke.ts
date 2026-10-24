@@ -1,5 +1,5 @@
 /**
- * End-to-end smoke test: the built app in Chrome against the demo relay. Covers a newcomer's first minute (onboarding,
+ * End-to-end smoke test: the built app in Chrome against a local relay with test fixtures. Covers a newcomer's first minute (onboarding,
  * a ranked feed, "why", liking, posting), creator and advertiser flows, and signing in on a second device.
  *
  *   npm run app:build && node e2e/smoke.ts          # uses the system Chrome
@@ -10,10 +10,10 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type Page } from 'playwright';
 import { preview } from 'vite';
 import { KIND } from '../src/kinds.ts';
-import { startDemoRelay } from '../tools/demo-relay.ts';
+import { startFixtureRelay } from './fixtures.ts';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const relay = await startDemoRelay(7791);
+const relay = await startFixtureRelay(7791);
 const server = await preview({ root: path.join(root, '../app'), configFile: path.join(root, '../app/vite.config.ts'), preview: { port: 4180, strictPort: true } });
 const url = 'http://localhost:4180/?relay=ws://localhost:7791';
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -62,7 +62,7 @@ try {
   step('a creator finds a sponsor and is asked where payments go');
   await page.getByRole('link', { name: 'Create' }).click();
   await page.getByRole('button', { name: /^Find sponsors/ }).first().click();
-  await page.getByText('Our autumn trail shoe').click();
+  await page.getByText('Test offer').click();
   await page.getByText('Paid to').waitFor();
   await page.getByRole('button', { name: 'Accept and write the post' }).click();
   await page.getByRole('heading', { name: 'Where should payments go?' }).waitFor();
@@ -73,17 +73,17 @@ try {
   await page.keyboard.press('Escape');
 
   step('anyone can sponsor a creator from their profile');
-  const mara = relay.creators[0];
-  await page.goto(`${url}#/p/${mara}`);
+  const creator = relay.creators[2];
+  await page.goto(`${url}#/p/${creator}`);
   await page.getByRole('button', { name: 'Support' }).waitFor();
   await page.getByRole('button', { name: 'Sponsor' }).click();
-  await page.getByPlaceholder('Our autumn trail shoe').fill('Try our trail bars');
+  await page.getByPlaceholder('What you’re promoting').fill('Try our trail bars');
   await page.locator('textarea').fill('Share an honest review of our trail bars.');
   await page.getByRole('button', { name: 'Send offer' }).click();
   await page.waitForTimeout(800);
   const sent = eventsOf(KIND.offer, me);
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].tags.find((t) => t[0] === 'p')?.[1], mara);
+  assert.equal(sent[0].tags.find((t) => t[0] === 'p')?.[1], creator);
 
   step('saving the account with a username and password');
   await page.goto(`${url}#/account`);
