@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { SEED_ACCOUNTS } from '@core/safety.ts';
 import { resetNetwork } from '../lib/safety.ts';
 import { KIND } from '@core/kinds.ts';
@@ -110,8 +111,7 @@ export function FeedSettings() {
         </div>
         <h2>Safety and languages</h2>
         <div className="card stack">
-          <p className="small muted" style={{ margin: 0 }}>Sexual content involving minors is always blocked, and its authors with it. Spam and junk are always hidden.</p>
-          <label className="switch"><span>Show sexual or sensitive posts</span><input type="checkbox" checked={sensitive} onChange={(e) => (setSensitive(e.target.checked), save('showSensitive', e.target.checked), bumpRecipe())} /></label>
+          <SafeSearch on={!sensitive} onChange={(on) => (setSensitive(!on), save('showSensitive', !on), bumpRecipe())} />
           <Toggle setting="showOffensive" label="Show posts with slurs or threats" />
           <Toggle setting="allLanguages" label="Show posts in all languages" />
           <Toggle setting="unvetted" label="Include accounts outside the starting network" hint="Off by default: new and unknown accounts are where most spam and abuse comes from." />
@@ -151,6 +151,37 @@ export function FeedSettings() {
           })}
         </div>
       </div>
+    </>
+  );
+}
+
+/**
+ * Safe search hides explicit content. Turning it off needs a self-declared 18+ confirmation, and in the iOS and Android
+ * apps it can only be changed on the web, as the app stores require; the setting then follows the account.
+ */
+function SafeSearch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const native = Capacitor.isNativePlatform();
+  return (
+    <>
+      <label className="switch">
+        <span>Safe search<br /><span className="tiny muted">{on ? 'Explicit content is hidden.' : 'Explicit content can appear. You confirmed you are 18 or older.'}</span></span>
+        <input type="checkbox" checked={on} disabled={native} onChange={(e) => (e.target.checked ? onChange(true) : setConfirming(true))} />
+      </label>
+      {native && <p className="tiny muted" style={{ margin: 0 }}>Adult content can only be turned on in the web version, at evolvetech.dev/play/fairground. The setting then follows your account here.</p>}
+      <p className="tiny muted" style={{ margin: 0 }}>Always blocked, whatever this says: sexual content involving minors, bestiality, and intimate images shared without consent.</p>
+      {confirming && (
+        <Sheet title="Turn off safe search?" onClose={() => setConfirming(false)}>
+          <p>Explicit sexual content may appear in your feed and on profiles. Only turn this off if you are <strong>18 or older</strong> and it is
+            legal for you to view such content where you live.</p>
+          <button type="button" className="btn primary block" onClick={() => {
+            save('adultConfirmedAt', Math.floor(Date.now() / 1000));
+            onChange(false);
+            setConfirming(false);
+          }}>I’m 18 or older, turn it off</button>
+          <button type="button" className="btn ghost block" onClick={() => setConfirming(false)}>Keep safe search on</button>
+        </Sheet>
+      )}
     </>
   );
 }

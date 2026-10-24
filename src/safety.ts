@@ -1,9 +1,12 @@
 /**
- * What a reader sees by default. Nostr relays carry everything anyone posts, so the client has to decide.
+ * What a reader sees. Nostr relays carry everything anyone posts, so the client has to decide.
  *
- * - Sexual content involving minors is never shown, whatever the settings, and its author is blocked.
- * - Sexual content, hate and threats, spam, junk and self-declared bots are hidden by default; readers can show
- *   sexual or offensive posts in settings.
+ * - Never shown, whatever the settings, with the author blocked: sexual content involving minors, bestiality, and
+ *   intimate imagery shared without consent. These are illegal in most places, and a client can't check each
+ *   reader's local law, so they are blocked everywhere.
+ * - Hidden by safe search, which is on by default: explicit sexual content. Adults (18+, self-declared) can turn it
+ *   off and see everything else that's legal.
+ * - Hidden by default: slurs and threats (a separate setting), spam, junk and self-declared bots.
  * - Posts in scripts the reader doesn't read are left out by default.
  *
  * The term lists below exist only to recognise abuse; they are not exhaustive, and the reputation gate in the feed
@@ -19,6 +22,8 @@ const SEXUAL = /\b(sex|sexy|nudes?|naked|porn\w*|xxx|nsfw|horny|blowjobs?|cum|di
 const ABUSE_CODES = /\b(pthc|child ?porn\w*|csam|jailbait|loli|shota)\b/;
 const SELLING = /(t\.me\/|telegram|dm me|\bcontents?\b|\bleaks?\b)/;
 const ADULT = /\b(porn\w*|xxx|nsfw|nudes?|naked|horny|blowjobs?|onlyfans|lewd|erotic\w*|cum|dicks?|cocks?|pussy|tits|boobs|nipples?|fetish\w*)\b/;
+const BESTIALITY = /\b(bestiality|zoophil\w*)\b/;
+const NON_CONSENSUAL = /\b(revenge ?porn|hidden ?cams?|spy ?cams?|upskirts?|creepshots?|leaked ?nudes|deepfake ?(porn|nudes?))\b/;
 const HATE = /\b(fag(got)?s?|homos|n[i1y]gg(a|as|er|ers|ah)|kikes?|retards?|trann(y|ies)|chinks?|spics?|wetbacks?|kys)\b|you('| ha)ve been warned|i('| wi)ll kill you|kill yourself/;
 
 /** Sexual content involving minors, or the codes used to sell it. */
@@ -28,6 +33,13 @@ export function isChildAbuse(ev: Event): boolean {
   if (MINOR.test(t) && SEXUAL.test(t)) return true;
   if (/\b(cp|pedo\w*)\b/.test(t) && (SEXUAL.test(t) || MINOR.test(t) || SELLING.test(t))) return true;
   return false;
+}
+
+/** Content that is never shown: child abuse, bestiality, and intimate imagery shared without consent. */
+export function isIllegal(ev: Event): boolean {
+  if (isChildAbuse(ev)) return true;
+  const t = text(ev);
+  return BESTIALITY.test(t) || NON_CONSENSUAL.test(t);
 }
 
 export type HideReason = 'sexual' | 'hate' | 'spam' | 'junk' | 'bot';
@@ -49,7 +61,7 @@ function looksLikeJson(s: string): boolean {
 }
 
 export function assess(ev: Event, profile?: { bot?: boolean }): Verdict {
-  if (isChildAbuse(ev)) return { block: true };
+  if (isIllegal(ev)) return { block: true };
   const t = text(ev);
   if (ev.tags.some((tag) => tag[0] === 'content-warning') || ADULT.test(t)) return { block: false, hide: 'sexual' };
   if (HATE.test(t)) return { block: false, hide: 'hate' };

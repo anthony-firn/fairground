@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { assess, isChildAbuse, networkFrom, readerScripts, repeats, scriptOf } from '../src/safety.ts';
+import { assess, isChildAbuse, isIllegal, networkFrom, readerScripts, repeats, scriptOf } from '../src/safety.ts';
 
 const key = generateSecretKey();
 const post = (content: string, tags: string[][] = [], at = 1_790_000_000) => finalizeEvent({ kind: 1, created_at: at, content, tags }, key);
@@ -61,4 +61,13 @@ test('the starting network is the seeds and everyone they follow', () => {
   const list = finalizeEvent({ kind: 3, created_at: 1, content: '', tags: [['p', followed], ['p', 'not-a-key']] }, seedKey);
   const stranger = finalizeEvent({ kind: 3, created_at: 1, content: '', tags: [['p', 'f'.repeat(64)]] }, key);
   assert.deepEqual([...networkFrom([list, stranger], [seed])].sort(), [seed, followed].sort());
+});
+
+test('bestiality and non-consensual intimate imagery are blocked like child abuse; legal adult content is only hidden', () => {
+  assert.ok(isIllegal(post('new bestiality clips')));
+  assert.ok(isIllegal(post('hidden cam in the changing room')));
+  assert.ok(isIllegal(post('revenge porn of my ex')));
+  assert.equal(isIllegal(post('new nsfw set, adults only')), false);
+  assert.deepEqual(assess(post('new nsfw set, adults only')), { block: false, hide: 'sexual' });
+  assert.deepEqual(assess(post('deepfake nudes of a celebrity')), { block: true });
 });
