@@ -58,7 +58,14 @@ function Empty({ what }: { what: string }) {
   );
 }
 
-const titleOf = (m: MediaItem) => m.title || m.description.split('\n')[0].slice(0, 100) || 'Untitled';
+/** The title, or the first line of the description, cut at a word if it's long. */
+function titleOf(m: MediaItem): string {
+  if (m.title) return m.title;
+  const line = m.description.replace(/https:\/\/\S+/g, '').split('\n').find((l) => l.trim())?.trim() ?? '';
+  if (line.length <= 100) return line || 'Untitled';
+  const cut = line.slice(0, 100);
+  return `${cut.slice(0, cut.lastIndexOf(' ') > 60 ? cut.lastIndexOf(' ') : 100)}…`;
+}
 
 export function PhotosScreen() {
   const { recipeVersion, navigate } = useApp();
