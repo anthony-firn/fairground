@@ -1,0 +1,40 @@
+{
+  "name": "fairground",
+  "version": "0.1.0",
+  "description": "A decentralized social network where advertisers pay creators directly, with post-quantum signed sponsorship deals priced to hold their purchasing power.",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Anthony Firn",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\"",
+    "typecheck": "tsc",
+    "relay": "node tools/dev-relay.ts",
+    "app:dev": "npm --prefix app run dev",
+    "app:build": "npm --prefix app run build",
+    "index:publish": "node tools/publish-index.ts"
+  },
+  "dependencies": {
+    "@cloudflare/blindrsa-ts": "^0.4.6",
+    "@noble/hashes": "^2.4.0",
+    "@noble/post-quantum": "^0.7.1",
+    "@scure/base": "^2.4.0",
+    "nostr-tools": "^2.25.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/ws": "^8.18.2",
+    "playwright": "^1.64.1",
+    "typescript": "^7.0.2",
+    "ws": "^8.22.0"
+  },
+  "workspaces": [
+    "app"
+  ]
+}

@@ -1,0 +1,119 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Onboarding } from './components/Onboarding.tsx';
+import { Icon } from './components/ui.tsx';
+import { AppContext, type AppState } from './context.ts';
+import { loadOrCreateAccount } from './lib/account.ts';
+import { announce } from './lib/data.ts';
+import { load, onChange } from './lib/storage.ts';
+import { scheduleSync } from './lib/vaultSync.ts';
+import { Compose } from './screens/Compose.tsx';
+import { Create, MediaKitScreen, SupportPageScreen } from './screens/Create.tsx';
+import { Home } from './screens/Home.tsx';
+import { Profile } from './screens/Profile.tsx';
+import { Promote } from './screens/Promote.tsx';
+import { RelayScreen } from './screens/Relay.tsx';
+import { Deals, Sponsors } from './screens/Sponsorships.tsx';
+import { runSurveyJobs, SurveyScreen } from './screens/Survey.tsx';
+import { About, AccountScreen, FeedSettings, RelaysScreen, SupportingScreen, You } from './screens/You.tsx';
+
+const { account, isNew } = loadOrCreateAccount();
+onChange(scheduleSync);
+
+function currentRoute() {
+  const hash = location.hash.replace(/^#/, '') || '/';
+  const [path, search = ''] = hash.split('?');
+  return { path, query: new URLSearchParams(search) };
+}
+
+const TABS = [
+  { path: '/', label: 'Home', icon: 'home' },
+  { path: '/post', label: 'Post', icon: 'plus' },
+  { path: '/create', label: 'Create', icon: 'spark' },
+  { path: '/you', label: 'You', icon: 'user' },
+];
+
+export function App() {
+  const [route, setRoute] = useState(currentRoute);
+  const [onboarding, setOnboarding] = useState(() => isNew || !load<boolean>('onboarded', false));
+  const [message, setMessage] = useState('');
+  const [recipeVersion, setRecipeVersion] = useState(0);
+
+  useEffect(() => {
+    const onHash = () => {
+      setRoute(currentRoute());
+      window.scrollTo({ top: 0 });
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  // Background work while the app is open: announce this account, issue survey tokens, send scheduled answers.
+  useEffect(() => {
+    announce(account).catch(() => undefined);
+    const run = () => runSurveyJobs(account).catch(() => undefined);
+    const first = setTimeout(run, 8000);
+    const every = setInterval(run, 60_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(every);
+    };
+  }, []);
+
+  const toast = useCallback((m: string) => {
+    setMessage(m);
+    setTimeout(() => setMessage((current) => (current === m ? '' : current)), 3500);
+  }, []);
+
+  const state = useMemo<AppState>(() => ({
+    account,
+    navigate: (path) => {
+      location.hash = path;
+    },
+    toast,
+    recipeVersion,
+    bumpRecipe: () => setRecipeVersion((v) => v + 1),
+  }), [toast, recipeVersion]);
+
+  const { path, query } = route;
+  let screen;
+  if (path === '/') screen = <Home />;
+  else if (path === '/post') screen = <Compose />;
+  else if (path === '/create') screen = <Create />;
+  else if (path === '/create/sponsors') screen = <Sponsors />;
+  else if (path === '/create/deals') screen = <Deals />;
+  else if (path === '/create/kit') screen = <MediaKitScreen />;
+  else if (path === '/create/support') screen = <SupportPageScreen />;
+  else if (path === '/create/survey') screen = <SurveyScreen />;
+  else if (path === '/promote') screen = <Promote query={query} />;
+  else if (path === '/relay') screen = <RelayScreen />;
+  else if (path === '/you') screen = <You />;
+  else if (path === '/feed') screen = <FeedSettings />;
+  else if (path === '/account') screen = <AccountScreen />;
+  else if (path === '/relays') screen = <RelaysScreen />;
+  else if (path === '/supporting') screen = <SupportingScreen />;
+  else if (path === '/about') screen = <About />;
+  else if (path.startsWith('/p/') && /^[0-9a-f]{64}$/.test(path.slice(3))) screen = <Profile key={path} pubkey={path.slice(3)} />;
+  else screen = <Home />;
+
+  const tab = TABS.slice().reverse().find((t) => (t.path === '/' ? path === '/' : path.startsWith(t.path)))?.path
+    ?? (['/feed', '/account', '/relays', '/supporting', '/about'].includes(path) ? '/you' : path.startsWith('/promote') || path === '/relay' ? '/create' : '');
+
+  return (
+    <AppContext.Provider value={state}>
+      <div className="app">
+        <main>{screen}</main>
+        <div className="tabbar">
+          <nav aria-label="Main">
+            {TABS.map((t) => (
+              <a key={t.path} href={`#${t.path}`} aria-current={tab === t.path ? 'page' : undefined}>
+                <Icon name={t.icon} />{t.label}
+              </a>
+            ))}
+          </nav>
+        </div>
+        {message && <div className="toast" role="status">{message}</div>}
+      </div>
+      {onboarding && <Onboarding onDone={() => (setOnboarding(false), setRecipeVersion((v) => v + 1))} />}
+    </AppContext.Provider>
+  );
+}

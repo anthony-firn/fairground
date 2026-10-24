@@ -1,0 +1,50 @@
+{
+  "transaction": {
+    "asset-transfer-transaction": {
+      "amount": 109600000,
+      "asset-id": 31566704,
+      "close-amount": 0,
+      "receiver": "E2ROUACM6GEKXI4AL3N5TFKEKJZAQBH235XV57OXQRAQI5TOVGEVV7AG2I"
+    },
+    "close-rewards": 0,
+    "closing-amount": 0,
+    "confirmed-round": 9068011,
+    "fee": 1000,
+    "first-valid": 9068007,
+    "genesis-hash": "wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+    "id": "ETECK546NQE7WWEMKP4KRJ3HQNU3746L6EVCVIHEKFKPEGAVVZDA",
+    "intra-round-offset": 14,
+    "last-valid": 9069007,
+    "lease": "rcMQHfe68911c2lQPW9qSL0bBbefFrVKDKzgXhLLuFc=",
+    "receiver-rewards": 0,
+    "round-time": 1600106672,
+    "sender": "2UEQTE5QDNXPI7M3TU44G6SYKLFWLPQO7EBZM7K7MHMQQMFI4QJPLHQFHM",
+    "sender-rewards": 1449,
+    "signature": {
+      "logicsig": {
+        "args": [
+          "VAHhpqOkB2j3tf48AjXAg6CJnmAFG3qM1obd8R8eIjSF6LCFAKq4S9YRTktlNIhmW1NI48Gotbpf4NvVRiMXCw=="
+        ],
+        "logic": "ASADwMyNCATw1oYPJgIgJqLqAEzxiKujgF7b2ZVEUnIIBPrfb17914RBBHZuqYkgk72Wk13ojs75LQelgYFIYcWveGZnDc+7zfepPvz5z+sxBCIMMRAjEhAxESQSEDEUKBIQMRctKQQQ",
+        "multisig-signature": {
+          "subsignature": [
+            {
+              "public-key": "v8w/YDBK3MmuXQg3njxy1K9cgEZIN2UQWDF3W5vp4MY=",
+              "signature": "eCyJDhO6SuyfuCy9DqX9IqPVg/wDup6dhNg+aYF9e0FS1Jn/fLhXOOANvq0Xq6lUV37V0PK0Zy/Qnvs+nzRADw=="
+            },
+            {
+              "public-key": "otp0n4h9tM8yu8LzH90DCoLInD6MBL/1H/Yuvtm/nYc="
+            },
+            {
+              "public-key": "bP/DP9SIymrDqgwZFL733vkGOZAETEnTq5TPT/6wga4=",
+              "signature": "/bdfUYL2FMpy6GJa+z5yGWEi/6jZK49YlfVLsteSpvXPu0OQsHUvCxoqVgwiTEUonPQ8R8TMKO/Xb30EPd0wAA=="
+            }
+          ],
+          "threshold": 2,
+          "version": 1
+        }
+      }
+    },
+    "tx-type": "axfer"
+  }
+}

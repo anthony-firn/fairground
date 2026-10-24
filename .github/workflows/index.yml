@@ -1,0 +1,23 @@
+name: Publish CPI attestations
+on:
+  # BLS releases CPI around mid-month; already-published values are skipped.
+  schedule:
+    - cron: '0 14 10-20 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node tools/publish-index.ts
+        env:
+          FAIRGROUND_INDEX_KEY: ${{ secrets.FAIRGROUND_INDEX_KEY }}

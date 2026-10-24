@@ -1,0 +1,7 @@
+node_modules/
+dist/
+public/ort/
+android/app/build/
+android/build/
+android/.gradle/
+ios/App/build/
