@@ -75,12 +75,16 @@ export function priceNow(price: IndexedPrice, index: IndexState | undefined): { 
 
 export const payoutAddress = (): string => load<string>('payTo', '');
 
-/** Publishes the account's post-quantum key binding and relay list once per device. */
+/** Publishes the account's post-quantum key binding, relay list and message relays once per device. */
 export async function announce(account: Account): Promise<void> {
   rememberBinding(account.binding);
-  if (load<string>('announced', '') === account.binding.id) return;
+  const version = `${account.binding.id}:2`;
+  if (load<string>('announced', '') === version) return;
   await publish(account.binding);
-  const relayList = finalizeEvent({ kind: 10002, created_at: Math.floor(Date.now() / 1000), content: '', tags: relays().map((r) => ['r', r]) }, account.nostrKey);
-  await publish(relayList).catch(() => undefined);
-  save('announced', account.binding.id);
+  const at = Math.floor(Date.now() / 1000);
+  const relayList = finalizeEvent({ kind: 10002, created_at: at, content: '', tags: relays().map((r) => ['r', r]) }, account.nostrKey);
+  // NIP-17: where to deliver this account's private messages.
+  const dmRelays = finalizeEvent({ kind: 10050, created_at: at, content: '', tags: relays().map((r) => ['relay', r]) }, account.nostrKey);
+  await Promise.all([publish(relayList), publish(dmRelays)]).catch(() => undefined);
+  save('announced', version);
 }

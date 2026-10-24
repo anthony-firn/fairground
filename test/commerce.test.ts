@@ -155,3 +155,11 @@ test('credentials show the strongest trusted claim, and drop expired or unknown 
   assert.deepEqual(views.map((v) => [v.type, v.status]), [['background-check', 'verified'], ['drivers-license', 'vouched']]);
   assert.equal(events[0].kind, KIND.credential);
 });
+
+test('quotes for requests are validated', async () => {
+  const { parseQuote } = await import('../src/commerce.ts');
+  const quote = { type: 'fairground/quote', listing: '30402:x:ride', title: 'Airport ride', amount: parseUsd('30').toString(), payTo };
+  assert.deepEqual(parseQuote(quote), { ...quote, note: undefined });
+  assert.equal(parseQuote({ ...quote, amount: '0' }), undefined);
+  assert.equal(parseQuote({ ...quote, payTo: undefined }), undefined);
+});

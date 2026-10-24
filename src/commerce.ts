@@ -464,3 +464,22 @@ export type ReportReason = 'illegal' | 'spam' | 'impersonation' | 'nudity' | 'ma
 export function reportTemplate(target: Event, reason: ReportReason, note = '') {
   return { kind: KIND.report, created_at: now(), content: note, tags: [['e', target.id, reason], ['p', target.pubkey, reason]] };
 }
+
+/** A helper's price for someone's request (a ride, an errand), sent privately. Accepting it turns it into an order. */
+export interface Quote {
+  type: 'fairground/quote';
+  /** The request listing's address. */
+  listing: string;
+  title: string;
+  /** Micro-dollars, as a decimal string. */
+  amount: string;
+  payTo: { rail: string; address: string };
+  note?: string;
+}
+
+export function parseQuote(json: unknown): Quote | undefined {
+  const q = json as Partial<Quote> | null;
+  if (!q || q.type !== 'fairground/quote' || typeof q.listing !== 'string' || typeof q.title !== 'string') return undefined;
+  if (!/^[1-9]\d*$/.test(q.amount ?? '') || !q.payTo?.rail || !q.payTo.address) return undefined;
+  return { type: q.type, listing: q.listing, title: q.title.slice(0, 200), amount: q.amount!, payTo: q.payTo, note: q.note ? String(q.note).slice(0, 1000) : undefined };
+}

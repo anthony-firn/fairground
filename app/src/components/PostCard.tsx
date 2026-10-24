@@ -59,6 +59,7 @@ export function PostCard({ post, ranked, liked, onReact, onWhy, onMenu }: Props)
               <button type="button" className="icon-btn" onClick={() => onWhy(ranked)} aria-label="Why am I seeing this?"><Icon name="info" /> Why</button>
             )}
             <button type="button" className="icon-btn" onClick={() => onReact(post, 'less')} aria-label="Show less like this"><Icon name="less" /> Less</button>
+            <button type="button" className="icon-btn" onClick={() => navigate(`/post/${post.id}`)} aria-label="Comments"><Icon name="comment" /></button>
             {onMenu && <button type="button" className="icon-btn" onClick={() => onMenu(post)} aria-label="More options"><Icon name="more" /></button>}
           </div>
         )}

@@ -16,6 +16,8 @@ import { nowSeconds, shortKey, usd } from '../lib/format.ts';
 import { rememberProfile, useEvents, useProfile } from '../lib/hooks.ts';
 import { publish, query } from '../lib/net.ts';
 import { allowed, isBlocked, safetySettings } from '../lib/safety.ts';
+import { useVouch } from './Credentials.tsx';
+import { SellerRecord, useSellerRecord } from './Market.tsx';
 import { load, save } from '../lib/storage.ts';
 
 export interface Supporting {
@@ -48,7 +50,9 @@ export function SupportSheet({ page, onClose }: { page: SupportPage; onClose: ()
     }
   }, [page, goal]);
 
-  useEffect(() => setAmount(suggested), [suggested]);
+  useEffect(() => {
+    setAmount(suggested);
+  }, [suggested]);
 
   if (paying) {
     return (
@@ -144,6 +148,8 @@ export function Profile({ pubkey }: { pubkey: string }) {
   const [kit, setKit] = useState<MediaKit>();
   const [supporting, setSupporting] = useState(false);
   const edit = useEditProfile();
+  const vouch = useVouch(pubkey);
+  const record = useSellerRecord(pubkey, page ? [page.payTo] : []);
   const { events: posts, loading } = useEvents({ kinds: [1], authors: [pubkey], limit: 40 });
   const settings = safetySettings();
   const topLevel = posts.filter((p: Event) => !p.tags.some((t) => t[0] === 'e' && (!t[3] || t[3] === 'reply' || t[3] === 'root')))
@@ -197,10 +203,13 @@ export function Profile({ pubkey }: { pubkey: string }) {
             <>
               <button type="button" className={`btn${follows.has(pubkey) ? '' : ' primary'}`} onClick={toggleFollow}>{follows.has(pubkey) ? 'Following' : 'Follow'}</button>
               {page && <button type="button" className="btn" onClick={() => setSupporting(true)}>Support</button>}
+              <button type="button" className="btn" onClick={() => navigate(`/messages/${pubkey}`)}>Message</button>
               <button type="button" className="btn" onClick={() => navigate(`/promote?to=${pubkey}`)}>Sponsor</button>
+              <button type="button" className="btn" onClick={vouch.open}>Vouch</button>
             </>
           )}
         </div>
+        <SellerRecord record={record} />
         {kit && (
           <div className="card small">
             <strong>Open to sponsorships</strong> · {usd(priceNow(kit.rate, index).amount)} per post
@@ -214,6 +223,7 @@ export function Profile({ pubkey }: { pubkey: string }) {
       {!loading && !topLevel.length && <p className="center muted">{mine ? 'Your posts will show here.' : 'No posts yet.'}</p>}
       {supporting && page && <SupportSheet page={page} onClose={() => setSupporting(false)} />}
       {edit.sheet}
+      {vouch.sheet}
     </>
   );
 }

@@ -67,6 +67,29 @@ can link an answer to a person, while advertisers can recount the answers and se
 optional ad-free pledge: after a month when supporters meet the goal, no sponsorships the next month. Supporters pay
 anonymously, and anyone can total the month and check the pledge from the chain.
 
+**A marketplace for goods, food and services.** Listings use NIP-99 classifieds, so other Nostr marketplaces show
+up too. They can be things for sale, menu items, services (rides, grocery runs, meal pickup, tasks, cleaning) or
+requests for help that people answer with a price. Sellers can open a shop, a restaurant with a menu, or a services
+page. Orders and offers travel as end-to-end encrypted messages (NIP-17), and buyers pay the seller's wallet directly.
+Only someone who paid can review: the payment memo carries an order id that commits to the buyer. Reliability shows
+verified orders and ratings, weighted towards reviewers the reader trusts. Credentials (licence, insurance, food
+handler card, background check) show as verified by organisations the reader trusts, vouched by people they follow,
+or self-declared.
+
+**Reddit-style comments everywhere.** Posts and listings have threaded replies with up and down votes, Best, Top, New
+and Controversial sorting, and collapsible branches.
+
+**Safe by default.** Nostr relays carry everything anyone posts, so the app decides what to show:
+
+- Sexual content involving minors, bestiality and intimate imagery shared without consent are never shown, and their
+  authors are blocked.
+- Safe search hides explicit content by default. Adults can turn it off after confirming they are 18 or older; in the
+  phone apps that's only possible on the web, as the app stores require.
+- Strangers reach the default feed only if long-standing, widely followed accounts follow them, which keeps new spam
+  and abuse accounts out.
+- Slurs, threats, spam and bots are hidden, every post can be hidden or reported, and posts in languages the reader
+  doesn't read are left out.
+
 **The commons loop.** After a payout, creators (and advertisers, after paying) can donate, opt-in, never pre-selected.
 They see exactly how it splits between development and relays, and which relays get it: the ones that actually served
 them, starting with relays run by their own followers. Anyone can run a relay and receive donations by publishing a
@@ -102,6 +125,14 @@ the account's vault on relays: keys, settings, AI interests, subscriptions, payo
   domain verified for them (associated domains / asset links), which isn't set up yet.
 - **Wallet links open the payer's wallet one payment at a time** (ARC-26 has no grouped payments), so a donation split
   across several recipients takes several confirmations.
+- **The marketplace has no escrow and no dispute process.** Reviews can't be faked without paying, but a seller could pay
+  themselves, at the cost of a fee. That's why reviews from strangers count for less. Drivers and food sellers are
+  responsible for their own licences, insurance and permits; the app shows safety guidance and credentials, not
+  guarantees.
+- **Private messages use NIP-17 (secp256k1), so they aren't post-quantum yet.** Swapping in a hybrid ML-KEM layer is a
+  planned change.
+- **Moderation reads text and hashtags, not images.** An explicit image with an innocent caption can get past it, and
+  the starting network does most of the work against spam accounts.
 - Fairground doesn't give legal or tax advice. Creators and advertisers remain responsible for their disclosures and
   taxes.
 
@@ -111,12 +142,13 @@ Node.js 22.18 or later. The protocol core runs as TypeScript with no build step;
 
 ```sh
 npm install
-npm test                  # protocol core: 79 unit tests
+npm test                  # protocol core: 102 unit tests
 npm run typecheck
 npm run app:dev           # the app on http://localhost:5173
 npm run app:build         # static build in app/dist
 node tools/dev-relay.ts   # an empty local relay; open the app with ?relay=ws://localhost:7777
 node e2e/smoke.ts         # end-to-end test of the built app in Chrome, against labelled test fixtures
+node e2e/market.ts        # two people: comments, safety, buying, requests, offers and orders
 ```
 
 The app reads public relays by default. `?relay=` (repeatable) points it elsewhere, and a build with
@@ -151,6 +183,10 @@ Store releases need signing keys and developer accounts, which aren't part of th
 | `src/survey.ts` | Audience surveys: blind tokens, throwaway-key answers and an independent recount |
 | `src/support.ts` | Fan support pages, monthly totals and the ad-free pledge check |
 | `src/commons.ts` | Donations to development and relays, relay payouts, anti-farming credit, pass-on pledges |
+| `src/comments.ts` | Threads (NIP-10 and NIP-22), votes (NIP-25), Reddit-style ranking |
+| `src/commerce.ts` | Listings (NIP-99), storefronts, orders, quotes, verified reviews, credentials, reports |
+| `src/safety.ts` | Illegal-content blocking, safe search, spam and bots, languages, the starting network |
+| `src/geohash.ts` | Approximate locations for "near me" |
 | `src/feed.ts` | Feed recipes, local ranking with explanations, cold start, local AI embedders |
 | `src/vault.ts` | Username-and-password vaults with passkey and recovery-code factors |
 | `src/memos.ts` | Payment memos that tie each transfer to its purpose |

@@ -95,6 +95,13 @@ export function Create() {
           <button type="button" onClick={() => navigate('/create/support')}>Fan support <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/create/survey')}>Audience survey <Icon name="chevron" /></button>
         </div>
+        <h2>Sell</h2>
+        <div className="card list">
+          <button type="button" onClick={() => navigate('/market/new')}>Sell something or offer a service <Icon name="chevron" /></button>
+          <button type="button" onClick={() => navigate('/create/store')}>Your store or restaurant <Icon name="chevron" /></button>
+          <button type="button" onClick={() => navigate('/orders')}>Orders <Icon name="chevron" /></button>
+          <button type="button" onClick={() => navigate('/create/credentials')}>Credentials and trust <Icon name="chevron" /></button>
+        </div>
         <h2>Grow</h2>
         <div className="card list">
           <button type="button" onClick={() => navigate('/promote')}>Advertise or cross-promote <Icon name="chevron" /></button>

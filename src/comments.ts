@@ -7,6 +7,7 @@
  * comments. Votes are NIP-25 reactions: `-` is a down vote and anything else an up vote, and only each voter's latest
  * reaction counts.
  */
+import type { Filter } from 'nostr-tools/filter';
 import { finalizeEvent, type Event } from 'nostr-tools/pure';
 import { KIND } from './kinds.ts';
 import { now } from './tags.ts';
@@ -62,10 +63,11 @@ export function createComment(nostrKey: Uint8Array, root: Event, parent: Event, 
 }
 
 /** A thread's comments live under a root `e` tag (notes) or root `A`/`E` scope (comments). */
-export function threadFilters(root: Event) {
-  return root.kind === KIND.note
-    ? [{ kinds: [KIND.note], '#e': [root.id] }]
-    : [{ kinds: [KIND.comment], [isAddressable(root.kind) ? '#A' : '#E']: [threadKey(root)] }];
+export function threadFilters(root: Event): Filter[] {
+  if (root.kind === KIND.note) return [{ kinds: [KIND.note], '#e': [root.id] }];
+  const filter: Filter = { kinds: [KIND.comment] };
+  filter[isAddressable(root.kind) ? '#A' : '#E'] = [threadKey(root)];
+  return [filter];
 }
 
 export type Vote = 1 | 0 | -1;

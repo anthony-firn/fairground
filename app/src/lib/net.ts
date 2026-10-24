@@ -4,7 +4,7 @@
  */
 import type { Filter } from 'nostr-tools/filter';
 import { SimplePool } from 'nostr-tools/pool';
-import type { Event } from 'nostr-tools/pure';
+import type { Event, EventTemplate, VerifiedEvent } from 'nostr-tools/pure';
 import { DEFAULT_RELAYS } from '@core/defaults.ts';
 import { normalizeRelayUrl } from '@core/memos.ts';
 import { periodOf } from '@core/support.ts';
@@ -36,9 +36,22 @@ export async function publish(ev: Event): Promise<number> {
 
 export const query = (filter: Filter, maxWait = 4000): Promise<Event[]> => pool.querySync(relays(), filter, { maxWait });
 
-export function subscribe(filter: Filter, onevent: (ev: Event) => void, oneose?: () => void): () => void {
-  const sub = pool.subscribeMany(relays(), filter, { onevent, oneose });
+export function subscribe(
+  filter: Filter,
+  onevent: (ev: Event) => void,
+  oneose?: () => void,
+  opts: { relays?: string[]; onauth?: (evt: EventTemplate) => Promise<VerifiedEvent> } = {},
+): () => void {
+  const sub = pool.subscribeMany(opts.relays ?? relays(), filter, { onevent, oneose, onauth: opts.onauth });
   return () => sub.close();
+}
+
+export async function publishTo(targets: string[], ev: Event): Promise<number> {
+  if (READ_ONLY) return targets.length;
+  const results = await Promise.allSettled(pool.publish(targets, ev));
+  const ok = results.filter((r) => r.status === 'fulfilled').length;
+  if (!ok) throw new Error('No relay accepted it. Check your connection and try again.');
+  return ok;
 }
 
 const firstRelay = new Map<string, string>();

@@ -42,6 +42,8 @@ export function You() {
         <div className="card list">
           <button type="button" onClick={edit.open}>Edit profile <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/feed')}>Your feed and AI <Icon name="chevron" /></button>
+          <button type="button" onClick={() => navigate('/messages')}>Messages <Icon name="chevron" /></button>
+          <button type="button" onClick={() => navigate('/orders')}>Orders <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/supporting')}>Creators you support <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/account')}>Account and sign-in <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/relays')}>Relays <Icon name="chevron" /></button>

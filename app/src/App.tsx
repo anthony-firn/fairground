@@ -6,7 +6,13 @@ import { loadOrCreateAccount } from './lib/account.ts';
 import { announce } from './lib/data.ts';
 import { load, onChange } from './lib/storage.ts';
 import { scheduleSync } from './lib/vaultSync.ts';
+import { startInbox } from './lib/dm.ts';
 import { Compose } from './screens/Compose.tsx';
+import { CredentialsScreen } from './screens/Credentials.tsx';
+import { ListingDetail, Market, NewListing, StoreEditor, StorePage } from './screens/Market.tsx';
+import { ConversationThread, Conversations } from './screens/Messages.tsx';
+import { Orders } from './screens/Orders.tsx';
+import { PostDetail } from './screens/PostDetail.tsx';
 import { Create, MediaKitScreen, SupportPageScreen } from './screens/Create.tsx';
 import { Home } from './screens/Home.tsx';
 import { Profile } from './screens/Profile.tsx';
@@ -27,6 +33,7 @@ function currentRoute() {
 
 const TABS = [
   { path: '/', label: 'Home', icon: 'home' },
+  { path: '/market', label: 'Market', icon: 'bag' },
   { path: '/post', label: 'Post', icon: 'plus' },
   { path: '/create', label: 'Create', icon: 'spark' },
   { path: '/you', label: 'You', icon: 'user' },
@@ -50,12 +57,14 @@ export function App() {
   // Background work while the app is open: announce this account, issue survey tokens, send scheduled answers.
   useEffect(() => {
     announce(account).catch(() => undefined);
+    const stopInbox = startInbox(account);
     const run = () => runSurveyJobs(account).catch(() => undefined);
     const first = setTimeout(run, 8000);
     const every = setInterval(run, 60_000);
     return () => {
       clearTimeout(first);
       clearInterval(every);
+      stopInbox();
     };
   }, []);
 
@@ -78,6 +87,16 @@ export function App() {
   let screen;
   if (path === '/') screen = <Home />;
   else if (path === '/post') screen = <Compose />;
+  else if (path === '/market') screen = <Market />;
+  else if (path === '/market/new') screen = <NewListing query={query} />;
+  else if (path.startsWith('/l/')) screen = <ListingDetail key={path} address={decodeURIComponent(path.slice(3))} />;
+  else if (path.startsWith('/s/')) screen = <StorePage key={path} address={decodeURIComponent(path.slice(3))} />;
+  else if (path === '/create/store') screen = <StoreEditor />;
+  else if (path === '/create/credentials') screen = <CredentialsScreen />;
+  else if (path === '/orders') screen = <Orders />;
+  else if (path === '/messages') screen = <Conversations />;
+  else if (path.startsWith('/messages/') && /^[0-9a-f]{64}$/.test(path.slice(10))) screen = <ConversationThread key={path} pubkey={path.slice(10)} />;
+  else if (path.startsWith('/post/') && /^[0-9a-f]{64}$/.test(path.slice(6))) screen = <PostDetail key={path} id={path.slice(6)} />;
   else if (path === '/create') screen = <Create />;
   else if (path === '/create/sponsors') screen = <Sponsors />;
   else if (path === '/create/deals') screen = <Deals />;
@@ -96,7 +115,9 @@ export function App() {
   else screen = <Home />;
 
   const tab = TABS.slice().reverse().find((t) => (t.path === '/' ? path === '/' : path.startsWith(t.path)))?.path
-    ?? (['/feed', '/account', '/relays', '/supporting', '/about'].includes(path) ? '/you' : path.startsWith('/promote') || path === '/relay' ? '/create' : '');
+    ?? (['/feed', '/account', '/relays', '/supporting', '/about', '/orders', '/messages'].includes(path) || path.startsWith('/messages/') ? '/you'
+      : path.startsWith('/promote') || path === '/relay' ? '/create'
+        : path.startsWith('/l/') || path.startsWith('/s/') ? '/market' : '');
 
   return (
     <AppContext.Provider value={state}>

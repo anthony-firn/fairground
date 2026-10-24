@@ -331,6 +331,82 @@ The ranking signals, each between 0 and 1:
 The score is the weighted mean of the signals. It is halved for sponsored posts under `downrank`. Posts beyond
 `maxPerAuthor` from one author move to the end.
 
+## Comments and votes
+
+Replies to kind-1 notes are kind-1 notes with NIP-10 `root` and `reply` markers. Comments on anything else are NIP-22
+kind-1111 comments, scoped by `A` (addressable roots, so edits keep their thread) or `E`. Votes are NIP-25 reactions
+(`-` down, anything else up, empty withdraws), and only each voter's latest reaction counts. "Best" is the lower bound
+of the Wilson interval at 80% confidence, and "Controversial" is `(up + down) ^ (min/max)`.
+
+## Listings (NIP-99, kind 30402)
+
+Standard NIP-99 tags, plus:
+
+- `["type", item | food | service | request | rental]`
+- `["payto", <rail id>, <address>]`
+- `["fulfillment", pickup | delivery | shipping | onsite | remote …]`
+- `["a", "33477:<pubkey>:<slug>"]`, the store
+- `g` tags at every precision from 2 up
+
+Listings are hybrid-signed. Clients take payment in-app only for USD prices with a post-quantum-verified `payto`.
+
+## Storefront (33477)
+
+```
+content: about
+tags: [["d", <slug>], ["name", …], ["type", shop | restaurant | services], ["payto", …], ["status", open | closed],
+       ["hours", …]?, ["location", …]?, ["image", …]?, ["fulfillment", …]?, ["g", …]...]
+```
+
+## Orders, quotes and updates
+
+These are private NIP-17 messages (kind 14, sealed and gift-wrapped). The readable text goes in the content, and the
+structured data in a `["fairground", <json>]` tag:
+
+- `fairground/order`: `orderId`, `lines` (`listing`, `title`, `quantity`, `unitPrice` in micro-dollars), `total`
+  (which must equal the lines), `fulfillment`, `note`, `payTo`.
+- `fairground/quote`: a helper's price for a request (`listing`, `title`, `amount`, `payTo`).
+- `fairground/order-status`: `accepted`, `declined`, `ready`, `on-the-way`, `completed` or `cancelled`, sent by the
+  seller.
+- `fairground/order-paid`: `txid`, sent by the buyer.
+
+`orderId = sha256("<buyer pubkey>:<nonce>")`, and the payment memo is `fairground:order:<orderId>`.
+
+## Review (3479)
+
+```
+content: text
+tags: [["p", <seller>], ["rating", 1–5], ["tx", <rail id>, <txid>], ["order", <orderId>, <nonce>], ["a", <listing>]?]
+```
+
+A review counts when all of these hold:
+
+- It is hybrid-signed.
+- `sha256("<reviewer pubkey>:<nonce>")` equals `orderId`.
+- The transfer's memo is the order's memo.
+- The transfer went to one of the seller's addresses.
+- The transfer isn't already claimed by an earlier review.
+
+## Credential (3480)
+
+```
+content: note
+tags: [["p", <subject>], ["credential", <type>], ["expires", <unix>]?, ["r", <evidence>]?]
+```
+
+Credentials are hybrid-signed. Each reader decides what a credential is worth:
+
+- **Verified:** the issuer is one the reader trusts.
+- **Vouched:** the issuer is someone the reader follows.
+- **Self-declared:** the issuer is the subject.
+
+Credentials from anyone else don't count. Expired ones are ignored.
+
+## Reports (NIP-56, kind 1984)
+
+`["e", <id>, <reason>]` and `["p", <pubkey>, <reason>]`. Clients hide reported accounts for the reporter. They may use
+other people's reports as one signal, but never alone, since reports can be weaponised.
+
 ## Rails
 
 | Id | Asset | Addresses | Verification |
