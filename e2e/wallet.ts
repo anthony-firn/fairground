@@ -96,6 +96,11 @@ try {
   step('a new wallet asks for a first deposit; nobody else funds it');
   await go(fan.page, '/wallet');
   await fan.page.getByText('Set up your wallet with a first deposit').waitFor({ timeout: 15000 });
+  await fan.page.getByRole('button', { name: 'Transfer ALGO from another wallet', exact: true }).click();
+  const receive = fan.page.getByRole('dialog', { name: 'Receive', exact: true });
+  await receive.getByText('For your first deposit, send ALGO', { exact: false }).waitFor();
+  assert.match(await receive.locator('code').innerText(), /^[A-Z2-7]{58}$/);
+  await receive.getByRole('button', { name: 'Close', exact: true }).click();
   await fan.page.getByRole('button', { name: 'Add money' }).click();
   await fan.page.getByText('This first deposit also sets up your wallet').waitFor();
   const popup = fan.page.waitForEvent('popup');

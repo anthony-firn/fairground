@@ -48,6 +48,12 @@ minimum and opt-in fee. Its watcher does not fund it or move donations out; it
 only opts it into mainnet USDC once sufficient ALGO arrives. A zero-balance
 destination cannot be made USDC-ready by configuration alone.
 
+If card checkout is not yet activated by Transak, open Wallet and choose
+**Transfer ALGO from another wallet**. Copy the displayed address or scan its QR
+code from an existing wallet/exchange, selecting the Algorand network. This
+first-deposit route uses the same automatic USDC setup and does not require
+Transak's partner API. Save the Fairground account before funding it.
+
 ## Stop or recover
 
 Keep the computer awake and online for the trial. To stop the live gateway:

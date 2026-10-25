@@ -36,6 +36,7 @@ function label(t: Transfer, mine: string): string {
  */
 export function FirstDeposit({ compact }: { compact?: boolean }) {
   const [adding, setAdding] = useState(false);
+  const [receiving, setReceiving] = useState(false);
   return (
     <div className="card stack">
       <strong>Set up your wallet with a first deposit</strong>
@@ -43,7 +44,9 @@ export function FirstDeposit({ compact }: { compact?: boolean }) {
         and network fees, and converts the rest to your dollar balance.</span>
       {!compact && <span className="tiny muted">The first deposit arrives as ALGO. Your wallet automatically enables USDC before converting it. After that, deposits arrive as USDC.</span>}
       <button type="button" className="btn primary" onClick={() => setAdding(true)}>Add money</button>
+      <button type="button" className="btn ghost" onClick={() => setReceiving(true)}>Transfer ALGO from another wallet</button>
       {adding && <RampSheet side="BUY" onClose={() => setAdding(false)} />}
+      {receiving && <ReceiveSheet setup onClose={() => setReceiving(false)} />}
     </div>
   );
 }
@@ -155,7 +158,7 @@ function SendSheet({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ReceiveSheet({ onClose }: { onClose: () => void }) {
+function ReceiveSheet({ onClose, setup = false }: { onClose: () => void; setup?: boolean }) {
   const { account, toast } = useApp();
   const { address } = useWallet(account);
   const [qr, setQr] = useState('');
@@ -164,7 +167,7 @@ function ReceiveSheet({ onClose }: { onClose: () => void }) {
   }, [address]);
   return (
     <Sheet title="Receive" onClose={onClose}>
-      <p className="small">{LOCAL_PILOT ? 'Preview address only. Do not send real funds to this test account.' : 'Your wallet’s address on Algorand. Send only USDC or ALGO to it.'}</p>
+      <p className="small">{LOCAL_PILOT ? 'Preview address only. Do not send real funds to this test account.' : setup ? 'For your first deposit, send ALGO on the Algorand network to this address. Keep your wallet open: it automatically enables USDC and converts the deposit, keeping a small ALGO reserve.' : 'Your wallet’s address on Algorand. Send only USDC or ALGO to it.'}</p>
       {qr && <img className="qr" src={qr} alt="QR code of your wallet address" />}
       <code className="tiny" style={{ wordBreak: 'break-all' }}>{address}</code>
       <button type="button" className="btn" onClick={() => navigator.clipboard.writeText(address).then(() => toast('Address copied'), () => undefined)}>Copy address</button>
