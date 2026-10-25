@@ -1,8 +1,7 @@
-/** Desktop chrome: a sidebar with every section, and a right-hand column with search, safety and topics. */
+/** Desktop chrome: a sidebar with every section, and a right-hand column with search and topics. */
 import { useState } from 'react';
 import { STARTER_TOPICS } from '@core/feed.ts';
 import { useApp } from '../context.ts';
-import { safetySettings } from '../lib/safety.ts';
 import { Icon } from './ui.tsx';
 
 const SECTIONS = [
@@ -38,7 +37,6 @@ export function Sidebar({ path }: { path: string }) {
 export function Aside() {
   const { navigate } = useApp();
   const [q, setQ] = useState('');
-  const safe = !safetySettings().showSensitive;
   return (
     <aside className="aside" aria-label="Search and topics">
       <form onSubmit={(e) => (e.preventDefault(), q.trim() && navigate(`/search?q=${encodeURIComponent(q.trim())}`))}>
@@ -52,7 +50,6 @@ export function Aside() {
       </div>
       <div className="card small stack">
         <span><strong>Your feed runs on this device.</strong> Nothing about what you read leaves it.</span>
-        <span className="muted">Safe search is {safe ? 'on' : 'off'}. <a href="#/feed">Change</a></span>
       </div>
       <p className="tiny muted">Fairground is open source. <a href="https://github.com/anthony-firn/fairground" target="_blank" rel="noopener noreferrer">Code</a> · <a href="#/about">About</a></p>
     </aside>

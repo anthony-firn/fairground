@@ -1,0 +1,9 @@
+{
+  email {$ACME_EMAIL}
+}
+{$PAYMENTS_HOST} {
+  request_body {
+    max_size 16KB
+  }
+  reverse_proxy payments:8080
+}

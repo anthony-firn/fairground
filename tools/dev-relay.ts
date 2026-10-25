@@ -29,7 +29,7 @@ export interface DevRelay {
   close(): Promise<void>;
 }
 
-export function startDevRelay(port = 7777, info: { pubkey?: string } = {}): Promise<DevRelay> {
+export function startDevRelay(port = 7777, info: { pubkey?: string; host?: string } = {}): Promise<DevRelay> {
   const events: Event[] = [];
   const subscriptions = new Map<WebSocket, Map<string, Filter[]>>();
 
@@ -93,9 +93,10 @@ export function startDevRelay(port = 7777, info: { pubkey?: string } = {}): Prom
     ws.on('close', () => subscriptions.delete(ws));
   });
 
-  return new Promise((resolve) => {
-    http.listen(port, () => resolve({
-      url: `ws://localhost:${port}`,
+  return new Promise((resolve, reject) => {
+    http.once('error', reject);
+    http.listen(port, info.host, () => resolve({
+      url: `ws://${info.host ?? 'localhost'}:${port}`,
       events,
       close: () => new Promise<void>((done) => {
         for (const client of wss.clients) client.terminate();

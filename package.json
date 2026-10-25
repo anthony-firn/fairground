@@ -13,6 +13,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "local:pilot": "node tools/local-pilot.ts",
     "test": "node --test \"test/*.test.ts\"",
     "typecheck": "tsc",
     "relay": "node tools/dev-relay.ts",

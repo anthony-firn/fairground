@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { LOCAL_PILOT } from './lib/pilot.ts';
 import { Onboarding } from './components/Onboarding.tsx';
 import { Aside, Sidebar } from './components/Shell.tsx';
 import { Icon } from './components/ui.tsx';
@@ -26,7 +27,7 @@ import { Promote } from './screens/Promote.tsx';
 import { RelayScreen } from './screens/Relay.tsx';
 import { Deals, Sponsors } from './screens/Sponsorships.tsx';
 import { runSurveyJobs, SurveyScreen } from './screens/Survey.tsx';
-import { About, AccountScreen, FeedSettings, RelaysScreen, SupportingScreen, You } from './screens/You.tsx';
+import { About, AccountScreen, FeedSettings, PersonalSettings, RelaysScreen, SupportingScreen, You } from './screens/You.tsx';
 
 const { account, isNew } = loadOrCreateAccount();
 onChange(scheduleSync);
@@ -135,6 +136,7 @@ export function App() {
   else if (path === '/relay') screen = <RelayScreen />;
   else if (path === '/you') screen = <You />;
   else if (path === '/feed') screen = <FeedSettings />;
+  else if (path === '/settings') screen = <PersonalSettings />;
   else if (path === '/account') screen = <AccountScreen />;
   else if (path === '/relays') screen = <RelaysScreen />;
   else if (path === '/supporting') screen = <SupportingScreen />;
@@ -144,7 +146,7 @@ export function App() {
 
   const wide = ['/videos', '/market', '/photos', '/search'].includes(path) || ['/media/', '/l/', '/s/'].some((p) => path.startsWith(p));
   const tab = ['/photos', '/videos', '/shorts', '/listen'].includes(path) || path.startsWith('/media/') || path.startsWith('/show/') ? '/' : TABS.slice().reverse().find((t) => (t.path === '/' ? path === '/' : path.startsWith(t.path)))?.path
-    ?? (['/feed', '/account', '/relays', '/supporting', '/about', '/orders', '/messages', '/wallet'].includes(path) || path.startsWith('/messages/') ? '/you'
+    ?? (['/feed', '/settings', '/account', '/relays', '/supporting', '/about', '/orders', '/messages', '/wallet'].includes(path) || path.startsWith('/messages/') ? '/you'
       : path.startsWith('/promote') || path.startsWith('/podcast') || path === '/relay' ? '/create'
         : path.startsWith('/l/') || path.startsWith('/s/') ? '/market' : '');
 
@@ -153,6 +155,7 @@ export function App() {
       <div className={`layout${wide ? ' wide' : ''}${path === '/shorts' ? ' shorts-layout' : ''}${path.startsWith('/media/') ? ' no-aside' : ''}`}>
       <Sidebar path={path} />
       <div className="app">
+        {LOCAL_PILOT && <div role="status" style={{ padding: '10px 16px', background: '#fff3bf', color: '#533f00' }}>Local staging preview · $25 demo balance · Real transfers disabled</div>}
         <main>{screen}</main>
         <div className="tabbar">
           <nav aria-label="Main">

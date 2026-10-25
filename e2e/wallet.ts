@@ -108,7 +108,7 @@ try {
 
   step('when the ALGO arrives, the wallet sets itself up and converts it to dollars');
   chain.fund(fanWallet, 250_000_000n); // Transak delivers $25 of ALGO.
-  await fan.page.reload();
+  await fan.page.getByRole('button', { name: 'Close', exact: true }).click();
   await fan.page.getByText('$24.8').first().waitFor({ timeout: 20000 });
   const fanState = chain.accounts.get(fanWallet)!;
   assert.ok(fanState.usdc! > 24_800_000n && fanState.usdc! < 25_000_000n, `converted: ${fanState.usdc}`);

@@ -62,7 +62,7 @@ export function createRamp(opts: RampOptions) {
      */
     async session(p: { side: 'BUY' | 'SELL'; walletAddress: string; customer: string; fiatAmount?: number; cryptoAmount?: number; redirectURL: string; userIp: string; email?: string; asset?: 'USDC' | 'ALGO' }): Promise<string> {
       const widgetParams: Record<string, unknown> = {
-        apiKey: opts.apiKey, referrerDomain: opts.referrerDomain, productsAvailed: p.side, network: 'algorand', cryptoCurrencyCode: p.side === 'BUY' ? p.asset ?? 'USDC' : 'USDC',
+        apiKey: opts.apiKey, referrerDomain: opts.referrerDomain, productsAvailed: p.side, network: p.side === 'BUY' && p.asset === 'ALGO' ? 'mainnet' : 'algorand', cryptoCurrencyCode: p.side === 'BUY' ? p.asset ?? 'USDC' : 'USDC',
         fiatCurrency: 'USD', partnerCustomerId: p.customer, redirectURL: p.redirectURL, hideMenu: true, themeColor: 'd9480f',
       };
       if (p.side === 'BUY') Object.assign(widgetParams, { walletAddress: p.walletAddress, disableWalletAddressForm: true, ...(p.fiatAmount ? { fiatAmount: p.fiatAmount } : {}) });
@@ -73,7 +73,11 @@ export function createRamp(opts: RampOptions) {
         headers: { 'x-api-key': opts.apiKey, 'access-token': await accessToken(), 'x-user-ip': p.userIp, 'Content-Type': 'application/json' },
         body: JSON.stringify({ widgetParams }),
       });
-      if (!res.ok) throw new Error(`Transak couldn’t start a session (${res.status})`);
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({})) as { error?: unknown };
+        if (res.status === 401 && error.error === 'invalid_api_key') throw new Error('Transak rejected the checkout API key. Check production activation and the approved domain and IP.');
+        throw new Error(`Transak couldn’t start a session (${res.status})`);
+      }
       const url = ((await res.json()) as { data?: { widgetUrl?: string } }).data?.widgetUrl;
       if (!url?.startsWith('https://')) throw new Error('Transak returned no widget link');
       return url;

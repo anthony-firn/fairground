@@ -40,10 +40,15 @@ interface Props {
   onClose: () => void;
 }
 
-/** Whether the development fund can receive USDC yet, checked once per session. */
-let devReady: Promise<boolean> | undefined;
-export const developmentReady = (): Promise<boolean> =>
-  (devReady ??= DEVELOPMENT_ADDRESS ? algorandUsdc.canReceive(DEVELOPMENT_ADDRESS).catch(() => false) : Promise.resolve(false));
+/** Recheck readiness so a newly initialized donation wallet is recognized without reloading. */
+let devReady: { expires: number; value: Promise<boolean> } | undefined;
+export const developmentReady = (): Promise<boolean> => {
+  if (!devReady || Date.now() >= devReady.expires) devReady = {
+    expires: Date.now() + 30_000,
+    value: DEVELOPMENT_ADDRESS ? algorandUsdc.canReceive(DEVELOPMENT_ADDRESS).catch(() => false) : Promise.resolve(false),
+  };
+  return devReady.value;
+};
 
 interface Recipient {
   payout: RelayPayout;

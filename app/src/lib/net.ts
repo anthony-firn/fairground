@@ -9,6 +9,7 @@ import { DEFAULT_RELAYS } from '@core/defaults.ts';
 import { normalizeRelayUrl } from '@core/memos.ts';
 import { periodOf } from '@core/support.ts';
 import { load, save } from './storage.ts';
+import { LOCAL_PILOT } from './pilot.ts';
 
 export const pool = new SimplePool();
 
@@ -16,6 +17,7 @@ export const pool = new SimplePool();
 const override = new URLSearchParams(location.search).getAll('relay');
 
 export function relays(): string[] {
+  if (LOCAL_PILOT) return [import.meta.env.VITE_LOCAL_RELAY];
   return override.length ? override : load<string[]>('relays', DEFAULT_RELAYS);
 }
 
@@ -47,6 +49,7 @@ export function subscribe(
 }
 
 export async function publishTo(targets: string[], ev: Event): Promise<number> {
+  if (LOCAL_PILOT) targets = relays();
   if (READ_ONLY) return targets.length;
   const results = await Promise.allSettled(pool.publish(targets, ev));
   const ok = results.filter((r) => r.status === 'fulfilled').length;

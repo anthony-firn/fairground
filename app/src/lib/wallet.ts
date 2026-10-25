@@ -4,11 +4,12 @@
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { DEFAULT_GATEWAY } from '@core/defaults.ts';
-import { convertibleAlgo, SETUP_MICROALGOS, walletAddress, walletState, type WalletState } from '@core/walletkey.ts';
+import { convertibleAlgo, walletAddress, walletState, type WalletState } from '@core/walletkey.ts';
 import type { Account } from './account.ts';
 import { load, save } from './storage.ts';
+import { LOCAL_PILOT } from './pilot.ts';
 
-export const gatewayUrl = (): string => load<string>('gateway', DEFAULT_GATEWAY);
+export const gatewayUrl = (): string => LOCAL_PILOT ? `${location.origin}/fairground` : load<string>('gateway', DEFAULT_GATEWAY);
 
 const addresses = new WeakMap<Uint8Array, string>();
 export function myWalletAddress(account: Account): string {
@@ -40,7 +41,25 @@ export function useWallet(account: Account): { address: string; state?: WalletSt
   const [error, setError] = useState<string>();
   const [cfg, setCfg] = useState<WalletConfig>();
   useEffect(() => {
-    walletState(address).then((s) => (setState(s), setError(undefined)), (e: Error) => setError(e.message));
+    if (LOCAL_PILOT) {
+      setState({ address, algo: 500_000n, minimum: 200_000n, usdc: 25_000_000n, active: true });
+      return;
+    }
+    let stopped = false;
+    let reading = false;
+    const read = async () => {
+      if (reading) return;
+      reading = true;
+      try {
+        const next = await walletState(address);
+        if (!stopped) { setState(next); setError(undefined); }
+      } catch (e) { if (!stopped) setError((e as Error).message); }
+      finally { reading = false; }
+    };
+    void read();
+    // Detect the first purchase while checkout is in another tab, without a manual refresh.
+    const timer = setInterval(read, 5000);
+    return () => { stopped = true; clearInterval(timer); };
   }, [address, v]);
   useEffect(() => {
     walletConfig().then(setCfg, () => undefined);
@@ -59,7 +78,7 @@ export function useSettle(account: Account, state: WalletState | undefined): { s
   const [status, setStatus] = useState<'idle' | 'working' | 'error'>('idle');
   const [error, setError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
-  const due = !!state && ((!state.active && state.algo >= SETUP_MICROALGOS) || convertibleAlgo(state) > 0n);
+  const due = !LOCAL_PILOT && !!state && ((!state.active && state.algo >= state.minimum + 101_000n) || convertibleAlgo(state) > 0n);
   useEffect(() => {
     if (!due || settling.has(account.pubkey)) return;
     settling.add(account.pubkey);

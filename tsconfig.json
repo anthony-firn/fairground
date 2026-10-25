@@ -13,5 +13,5 @@
     "noUnusedLocals": true,
     "skipLibCheck": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "gateway", "tools/local-pilot.ts", "tools/opt-in-development-wallet.ts"]
 }

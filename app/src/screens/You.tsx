@@ -44,6 +44,7 @@ export function You() {
           <button type="button" onClick={edit.open}>Edit profile <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/wallet')}>Wallet <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/feed')}>Your feed and AI <Icon name="chevron" /></button>
+          <button type="button" onClick={() => navigate('/settings')}>Personal settings <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/messages')}>Messages <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/orders')}>Orders <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/supporting')}>Creators you support <Icon name="chevron" /></button>
@@ -72,7 +73,6 @@ export function FeedSettings() {
   const [recipe, setRecipe] = useState<FeedRecipe>(() => load('recipe', DEFAULT_RECIPE));
   const [model, setModel] = useState<ModelChoice>(modelChoice);
   const [muted, setMuted] = useState(recipe.mutedWords.join(', '));
-  const [sensitive, setSensitive] = useState(() => load('showSensitive', false));
   const { events: shared } = useEvents({ kinds: [KIND.feedRecipe], limit: 30 });
 
   const apply = (next: FeedRecipe) => {
@@ -115,10 +115,8 @@ export function FeedSettings() {
             <input type="text" value={muted} onChange={(e) => setMuted(e.target.value)} onBlur={() => apply({ ...recipe, mutedWords: muted.split(',').map((w) => w.trim().toLowerCase()).filter(Boolean) })} />
           </Field>
         </div>
-        <h2>Safety and languages</h2>
+        <h2>Languages</h2>
         <div className="card stack">
-          <SafeSearch on={!sensitive} onChange={(on) => (setSensitive(!on), save('showSensitive', !on), bumpRecipe())} />
-          <Toggle setting="showOffensive" label="Show posts with slurs or threats" />
           <Languages />
           <Toggle setting="allLanguages" label="Show posts in all languages" />
           <details className="small">
@@ -162,32 +160,49 @@ export function FeedSettings() {
 }
 
 /**
- * Safe search hides explicit content. Turning it off needs a self-declared 18+ confirmation, and in the iOS and Android
+ * Hiding explicit content is the default. Showing it needs a self-declared 18+ confirmation, and in the iOS and Android
  * apps it can only be changed on the web, as the app stores require; the setting then follows the account.
  */
-function SafeSearch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+function ExplicitContentFilter({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
   const [confirming, setConfirming] = useState(false);
   const native = Capacitor.isNativePlatform();
   return (
     <>
       <label className="switch">
-        <span>Safe search<br /><span className="tiny muted">{on ? 'Explicit content is hidden.' : 'Explicit content can appear. You confirmed you are 18 or older.'}</span></span>
+        <span>Hide explicit content<br /><span className="tiny muted">{on ? 'Explicit content is hidden.' : 'Explicit content can appear. You confirmed you are 18 or older.'}</span></span>
         <input type="checkbox" checked={on} disabled={native} onChange={(e) => (e.target.checked ? onChange(true) : setConfirming(true))} />
       </label>
       {native && <p className="tiny muted" style={{ margin: 0 }}>Adult content can only be turned on in the web version, at evolvetech.dev/play/fairground. The setting then follows your account here.</p>}
       <p className="tiny muted" style={{ margin: 0 }}>Always blocked, whatever this says: sexual content involving minors, bestiality, and intimate images shared without consent.</p>
       {confirming && (
-        <Sheet title="Turn off safe search?" onClose={() => setConfirming(false)}>
+        <Sheet title="Show explicit content?" onClose={() => setConfirming(false)}>
           <p>Explicit sexual content may appear in your feed and on profiles. Only turn this off if you are <strong>18 or older</strong> and it is
             legal for you to view such content where you live.</p>
           <button type="button" className="btn primary block" onClick={() => {
             save('adultConfirmedAt', Math.floor(Date.now() / 1000));
             onChange(false);
             setConfirming(false);
-          }}>I’m 18 or older, turn it off</button>
-          <button type="button" className="btn ghost block" onClick={() => setConfirming(false)}>Keep safe search on</button>
+          }}>I’m 18 or older, show explicit content</button>
+          <button type="button" className="btn ghost block" onClick={() => setConfirming(false)}>Keep explicit content hidden</button>
         </Sheet>
       )}
+    </>
+  );
+}
+
+export function PersonalSettings() {
+  const { navigate, bumpRecipe } = useApp();
+  const [sensitive, setSensitive] = useState(() => load('showSensitive', false));
+  return (
+    <>
+      <TopBar title="Personal settings" back={() => navigate('/you')} />
+      <div className="page">
+        <h2>Content preferences</h2>
+        <div className="card stack">
+          <ExplicitContentFilter on={!sensitive} onChange={(on) => (setSensitive(!on), save('showSensitive', !on), bumpRecipe())} />
+          <Toggle setting="showOffensive" label="Show posts with slurs or threats" />
+        </div>
+      </div>
     </>
   );
 }

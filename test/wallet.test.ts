@@ -21,6 +21,12 @@ test('the wallet key comes from the account key, so the backup restores it', () 
   assert.notEqual(walletKeys(generateSecretKey()).address, a.address);
 });
 
+test('an unfunded account is shown as an empty wallet ready for its first deposit', async () => {
+  const address = walletKeys(generateSecretKey()).address;
+  const state = await walletState(address, ALGOD, async () => new Response(null, { status: 404 }));
+  assert.deepEqual(state, { address, algo: 0n, minimum: 100_000n, usdc: 0n, active: false });
+});
+
 test('decoding, signing exact bytes and application addresses match the Algorand SDK', () => {
   const keys = walletKeys(generateSecretKey());
   const sdkAccount = { addr: keys.address, sk: new Uint8Array([...keys.seed, ...algosdk.decodeAddress(keys.address).publicKey]) };
@@ -148,7 +154,8 @@ test('Transak sessions are made on the server; a first deposit buys ALGO; sales 
   assert.equal(wp(later).cryptoCurrencyCode, 'USDC');
   assert.equal(wp(first).walletAddress, buyer);
   assert.equal(wp(first).disableWalletAddressForm, true);
-  assert.equal(wp(first).network, 'algorand');
+  assert.equal(wp(first).network, 'mainnet', 'Transak identifies native ALGO with mainnet, not algorand');
+  assert.equal(wp(later).network, 'algorand');
   assert.equal(first.headers.get('access-token'), 'token-1');
   assert.equal(first.headers.get('api-secret'), null, 'the secret goes only to the token endpoint');
   assert.equal(wp(sell).walletRedirection, true);
@@ -182,6 +189,19 @@ test('the gateway opens Transak only for signed requests from Fairground members
     assert.equal(sent.headers.get('x-user-ip'), '5.6.7.8');
     assert.equal((sent.body!.widgetParams as Record<string, unknown>).partnerCustomerId, member.pubkey);
     assert.equal((sent.body!.widgetParams as Record<string, unknown>).cryptoCurrencyCode, 'ALGO');
+    const preflight = await gw(new Request('https://gw.test/fg/ramp/session', { method: 'OPTIONS', headers: { Origin: 'https://app.test' } }));
+    assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), 'https://app.test');
+    const before = t.calls.length;
+    assert.equal((await gw(new Request('https://gw.test/fg/ramp/session', { method: 'OPTIONS', headers: { Origin: 'https://other.test' } }))).status, 403);
+    const badOrigin = await gw(new Request('https://gw.test/fg/ramp/session', { method: 'POST', headers: { Origin: 'https://other.test' }, body: '{}' }));
+    assert.equal(badOrigin.status, 403);
+    assert.equal(badOrigin.headers.get('Access-Control-Allow-Origin'), null);
+    assert.equal(t.calls.length, before, 'rejected origins never reach Transak');
+    assert.equal((await post(member, '/ramp/session', { side: 'BUY', walletAddress: address, redirectURL: 'https://other.test/' })).status, 400);
+    const noIpUrl = 'https://gw.test/fg/ramp/session';
+    const noIpBody = JSON.stringify({ side: 'BUY', walletAddress: address, redirectURL: 'https://app.test/' });
+    const noIp = await gw(new Request(noIpUrl, { method: 'POST', body: noIpBody, headers: { Authorization: authHeader(member.nostrKey, noIpUrl, 'POST', noIpBody) } }));
+    assert.equal(noIp.status, 503, 'never invent a visitor IP for Transak');
     assert.equal((await post(stranger, '/ramp/session', { side: 'BUY', walletAddress: address, redirectURL: 'https://app.test/' })).status, 403, 'members only');
     assert.equal((await gw(new Request('https://gw.test/fg/ramp/session', { method: 'POST', body: '{}' }))).status, 401);
 

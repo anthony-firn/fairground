@@ -1,0 +1,40 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Fairground fixed-IP payment gateway. One Lightsail VM and one attached static IPv4; no NAT gateway or load balancer.",
+  "Parameters": {
+    "InstanceName": { "Type": "String", "Default": "fairground-payments" },
+    "BlueprintId": { "Type": "String", "Default": "ubuntu_24_04", "Description": "Confirm availability with lightsail get-blueprints before creating the stack." },
+    "BundleId": { "Type": "String", "Default": "nano_3_0", "Description": "Confirm this is the $5 Linux IPv4 bundle with lightsail get-bundles before creating the stack." },
+    "KeyPairName": { "Type": "String", "Description": "Name of an existing Lightsail SSH key pair in the deployment region." },
+    "AdminCidr": { "Type": "String", "AllowedPattern": "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/32", "Description": "Your current administrator IPv4 as a /32. SSH is restricted to this address." }
+  },
+  "Resources": {
+    "Payments": {
+      "Type": "AWS::Lightsail::Instance",
+      "Properties": {
+        "InstanceName": { "Ref": "InstanceName" },
+        "BlueprintId": { "Ref": "BlueprintId" },
+        "BundleId": { "Ref": "BundleId" },
+        "KeyPairName": { "Ref": "KeyPairName" },
+        "Networking": { "Ports": [
+          { "FromPort": 22, "ToPort": 22, "Protocol": "tcp", "Cidrs": [{ "Ref": "AdminCidr" }] },
+          { "FromPort": 80, "ToPort": 80, "Protocol": "tcp", "Cidrs": ["0.0.0.0/0"] },
+          { "FromPort": 443, "ToPort": 443, "Protocol": "tcp", "Cidrs": ["0.0.0.0/0"] }
+        ] },
+        "Tags": [{ "Key": "project", "Value": "fairground-payments" }],
+        "UserData": "#!/bin/bash\nset -euo pipefail\nexport DEBIAN_FRONTEND=noninteractive\napt-get update\napt-get install -y docker.io docker-compose-v2 unattended-upgrades\nsystemctl enable --now docker\ninstall -d -m 700 /opt/fairground\n"
+      }
+    },
+    "EgressIp": {
+      "Type": "AWS::Lightsail::StaticIp",
+      "Properties": {
+        "StaticIpName": { "Fn::Sub": "${InstanceName}-egress" },
+        "AttachedTo": { "Ref": "Payments" }
+      }
+    }
+  },
+  "Outputs": {
+    "StaticIPv4": { "Value": { "Fn::GetAtt": ["EgressIp", "IpAddress"] }, "Description": "Register this IP with Transak and publish the payments hostname's A record." },
+    "InstanceName": { "Value": { "Ref": "Payments" } }
+  }
+}

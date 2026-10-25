@@ -5,10 +5,11 @@ import type { PaymentRequest, Transfer } from '@core/rails/rail.ts';
 import type { RampOrder } from '@core/ramp.ts';
 import { prepareSwap, quoteSwap, signSwap, swapProblem } from '@core/swap.ts';
 import {
-  confirmed, convertibleAlgo, needsFeeTopUp, SETUP_MICROALGOS, sign, submit, suggestedParams, usdcOptIn, usdcPayment, walletKeys, walletState,
+  confirmed, convertibleAlgo, needsFeeTopUp, sign, submit, suggestedParams, usdcOptIn, usdcPayment, walletKeys, walletState,
 } from '@core/wallet.ts';
 import type { Account } from './account.ts';
 import { gatewayUrl, walletChanged } from './wallet.ts';
+import { requireRealPayments } from './pilot.ts';
 
 async function call<T>(account: Account, path: string, method: 'GET' | 'POST', body?: unknown): Promise<T> {
   const url = `${gatewayUrl()}${path}`;
@@ -36,10 +37,11 @@ async function swap(account: Account, from: number, to: number, amount: bigint):
  * reserve to dollars. Also converts ALGO that arrives later. Does nothing when there's nothing to do.
  */
 export async function settleWallet(account: Account): Promise<'waiting' | 'converted' | 'idle'> {
+  requireRealPayments();
   const keys = walletKeys(account.nostrKey);
   let state = await walletState(keys.address);
   if (!state.active) {
-    if (state.algo < SETUP_MICROALGOS) return 'waiting';
+    if (state.algo < state.minimum + 101_000n) return 'waiting';
     await confirmed(await submit([sign(usdcOptIn(keys.address, await suggestedParams()), keys.seed)]));
     state = await walletState(keys.address);
     walletChanged();
@@ -53,6 +55,7 @@ export async function settleWallet(account: Account): Promise<'waiting' | 'conve
 
 /** Pays from the wallet: the same USDC transfer and memo a payment link would make, signed on this device. */
 export async function payFromWallet(account: Account, request: PaymentRequest): Promise<Transfer> {
+  requireRealPayments();
   const keys = walletKeys(account.nostrKey);
   // Keep a few cents of ALGO for network fees, bought with the wallet's own dollars, so payments never stall.
   const state = await walletState(keys.address);

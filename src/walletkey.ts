@@ -39,6 +39,7 @@ export interface WalletState {
 export async function walletState(address: string, algod = DEFAULT_ALGOD, fetchImpl: typeof fetch = (...a) => fetch(...a)): Promise<WalletState> {
   // algod's `exclude` takes only `all` or `none`, and `all` would drop the USDC holding, so ask for everything.
   const res = await fetchImpl(`${algod}/v2/accounts/${address}`);
+  if (res.status === 404) return { address, algo: 0n, minimum: 100_000n, usdc: 0n, active: false };
   if (!res.ok) throw new Error(`reading the wallet: the Algorand node said ${res.status}`);
   const body = (await res.json()) as Record<string, unknown>;
   const assets = (body.assets ?? []) as { 'asset-id': number; amount: number; 'is-frozen'?: boolean }[];

@@ -1,8 +1,10 @@
 # Fairground
 
 A social network with no company in the middle. Advertisers and fans pay creators directly, every deal is a signed
-public record anyone can check, readers control their own feed algorithm, and nothing runs on servers the project has
-to pay for.
+public record anyone can check, and readers control their own feed algorithm. The social network uses distributed
+storage and a static app. Optional card/bank integrations require an approved payment gateway with a fixed IP;
+the [near-$0 hosting plan](docs/payment-hosting-options.md) explores free-tier and contributor-run gateways,
+with a [small-server deployment](gateway/payments/README.md) available as a paid fallback.
 
 **Status: early release.** The protocol core, the web app and the Android and iOS projects are built and tested. Try it
 at **[evolvetech.dev/play/fairground](https://www.evolvetech.dev/play/fairground/)**. Payments are real USDC; use small

@@ -1,0 +1,10 @@
+**/node_modules
+.git
+app
+dist-gateway
+test
+e2e
+docs
+**/.env
+**/.env.*
+*.log

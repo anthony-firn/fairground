@@ -40,6 +40,8 @@ export interface GatewayOptions {
   blocked?: string[];
   /** Buying and selling USDC through Transak (ramp.ts). Off unless partner credentials are configured. */
   ramp?: RampOptions;
+  /** Browser origins permitted to use wallet services; defaults to the app's origin. */
+  walletOrigins?: string[];
 }
 
 /** What the platform knows about a request that the Request itself doesn't carry. */
@@ -283,12 +285,19 @@ export function createGateway(opts: GatewayOptions): (req: Request, info?: Reque
       const body = await req.text();
       const who = await member(req, body);
       if (who instanceof Response) return who;
-      const p = JSON.parse(body || '{}') as { side?: string; walletAddress?: string; amount?: number; redirectURL?: string; asset?: string };
+      let p: { side?: string; walletAddress?: string; amount?: number; redirectURL?: string; asset?: string };
+      try { p = JSON.parse(body || '{}'); } catch { return reply({ error: 'bad request' }, 400); }
+      if (!p || typeof p !== 'object') return reply({ error: 'bad request' }, 400);
       if ((p.side !== 'BUY' && p.side !== 'SELL') || !/^[A-Z2-7]{58}$/.test(p.walletAddress ?? '') || !/^(https:\/\/|http:\/\/localhost[:/])/.test(p.redirectURL ?? '')) return reply({ error: 'bad request' }, 400);
+      let redirect: URL;
+      try { redirect = new URL(p.redirectURL!); } catch { return reply({ error: 'bad return URL' }, 400); }
+      const app = new URL(opts.appUrl);
+      if (redirect.origin !== app.origin || redirect.pathname !== app.pathname) return reply({ error: 'return to this app only' }, 400);
+      if (!info.ip || info.ip === '0.0.0.0') return reply({ error: 'the gateway could not determine your IP address' }, 503);
       const amount = Number(p.amount) > 0 ? Number(p.amount) : undefined;
       try {
         const url = await ramp.session({
-          side: p.side, walletAddress: p.walletAddress!, customer: who, redirectURL: p.redirectURL!, userIp: info.ip ?? '0.0.0.0', asset: p.asset === 'ALGO' ? 'ALGO' : 'USDC',
+          side: p.side, walletAddress: p.walletAddress!, customer: who, redirectURL: p.redirectURL!, userIp: info.ip, asset: p.asset === 'ALGO' ? 'ALGO' : 'USDC',
           ...(p.side === 'BUY' ? { fiatAmount: amount } : { cryptoAmount: amount }),
         });
         return reply({ url });
@@ -313,10 +322,22 @@ export function createGateway(opts: GatewayOptions): (req: Request, info?: Reque
   }
 
   return async function handle(req: Request, info: RequestInfo = {}): Promise<Response> {
-    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...cors, 'Access-Control-Allow-Headers': 'Range, Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, HEAD, POST' } });
     const url = new URL(req.url);
     const path = url.pathname.startsWith(base) ? url.pathname.slice(base.length) : url.pathname;
-    if (path.startsWith('/wallet/') || path.startsWith('/ramp/')) return (await money(req, path, info)) ?? notFound('page');
+    if (path.startsWith('/wallet/') || path.startsWith('/ramp/')) {
+      const allowed = opts.walletOrigins ?? [new URL(opts.appUrl).origin];
+      const origin = req.headers.get('Origin');
+      // Native/server clients can omit Origin; signed member authentication still applies.
+      if (origin && !allowed.includes(origin)) return Response.json({ error: 'origin not allowed' }, { status: 403, headers: { 'Cache-Control': 'no-store', Vary: 'Origin' } });
+      const response = req.method === 'OPTIONS'
+        ? new Response(null, { status: 204, headers: { 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST' } })
+        : (await money(req, path, info)) ?? notFound('page');
+      response.headers.set('Access-Control-Allow-Origin', origin ?? allowed[0]);
+      response.headers.set('Vary', 'Origin');
+      response.headers.set('Cache-Control', 'no-store');
+      return response;
+    }
+    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...cors, 'Access-Control-Allow-Headers': 'Range, Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, HEAD, POST' } });
     if (req.method !== 'GET' && req.method !== 'HEAD') return new Response('method not allowed\n', { status: 405, headers: cors });
     if (path === '/health') {
       const relays = await Promise.all(opts.relays.map(async (relay) => {
