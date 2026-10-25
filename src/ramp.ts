@@ -65,7 +65,11 @@ export function createRamp(opts: RampOptions) {
         apiKey: opts.apiKey, referrerDomain: opts.referrerDomain, productsAvailed: p.side, network: p.side === 'BUY' && p.asset === 'ALGO' ? 'mainnet' : 'algorand', cryptoCurrencyCode: p.side === 'BUY' ? p.asset ?? 'USDC' : 'USDC',
         fiatCurrency: 'USD', partnerCustomerId: p.customer, redirectURL: p.redirectURL, hideMenu: true, themeColor: 'd9480f',
       };
-      if (p.side === 'BUY') Object.assign(widgetParams, { walletAddress: p.walletAddress, disableWalletAddressForm: true, ...(p.fiatAmount ? { fiatAmount: p.fiatAmount } : {}) });
+      if (p.side === 'BUY') Object.assign(widgetParams, {
+        walletAddress: p.walletAddress, disableWalletAddressForm: true,
+        paymentMethod: 'credit_debit_card', hideExchangeScreen: !!p.fiatAmount,
+        ...(p.fiatAmount ? { fiatAmount: p.fiatAmount } : {}),
+      });
       else Object.assign(widgetParams, { walletRedirection: true, ...(p.cryptoAmount ? { cryptoAmount: p.cryptoAmount } : {}) });
       if (p.email) widgetParams.email = p.email;
       const res = await fetchImpl(`${hosts.gateway}/api/v2/auth/session`, {
@@ -75,7 +79,7 @@ export function createRamp(opts: RampOptions) {
       });
       if (!res.ok) {
         const error = await res.json().catch(() => ({})) as { error?: unknown };
-        if (res.status === 401 && error.error === 'invalid_api_key') throw new Error('Transak rejected the checkout API key. Check production activation and the approved domain and IP.');
+        if (res.status === 401 && error.error === 'invalid_api_key') throw new Error('Card checkout is awaiting Transak activation. Please try again once it is enabled.');
         throw new Error(`Transak couldn’t start a session (${res.status})`);
       }
       const url = ((await res.json()) as { data?: { widgetUrl?: string } }).data?.widgetUrl;

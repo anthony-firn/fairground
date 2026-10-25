@@ -94,6 +94,8 @@ try {
   const creator = await person();
 
   step('a new wallet asks for a first deposit; nobody else funds it');
+  const configUrl = `${DEFAULT_GATEWAY}/wallet/config`;
+  await fan.ctx.route(configUrl, (route) => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'payment service temporarily unavailable' }) }));
   await go(fan.page, '/wallet');
   await fan.page.getByText('Set up your wallet with a first deposit').waitFor({ timeout: 15000 });
   await fan.page.getByRole('button', { name: 'Transfer ALGO from another wallet', exact: true }).click();
@@ -102,6 +104,10 @@ try {
   assert.match(await receive.locator('code').innerText(), /^[A-Z2-7]{58}$/);
   await receive.getByRole('button', { name: 'Close', exact: true }).click();
   await fan.page.getByRole('button', { name: 'Add money' }).click();
+  await fan.page.getByText('Card payments are temporarily unavailable.', { exact: false }).waitFor();
+  assert.equal(await fan.page.getByText('At an exchange such as Kraken', { exact: false }).count(), 0, 'a card outage must not replace checkout with exchange instructions');
+  await fan.ctx.unroute(configUrl);
+  await fan.page.getByRole('button', { name: 'Try again', exact: true }).click();
   await fan.page.getByText('This first deposit also sets up your wallet').waitFor();
   const popup = fan.page.waitForEvent('popup');
   await fan.page.getByRole('button', { name: 'Continue with Transak' }).click();
@@ -109,6 +115,8 @@ try {
   await widget.waitForURL(/global-stg\.transak\.com\/\?sessionId=test/);
   await widget.close();
   assert.equal(sessions.at(-1)!.cryptoCurrencyCode, 'ALGO', 'the first deposit buys ALGO');
+  assert.equal(sessions.at(-1)!.paymentMethod, 'credit_debit_card');
+  assert.equal(sessions.at(-1)!.hideExchangeScreen, true);
   const fanWallet = String(sessions.at(-1)!.walletAddress);
 
   step('when the ALGO arrives, the wallet sets itself up and converts it to dollars');

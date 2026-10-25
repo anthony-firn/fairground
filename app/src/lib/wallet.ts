@@ -23,8 +23,12 @@ export interface WalletConfig {
 }
 
 let config: Promise<WalletConfig> | undefined;
-export const walletConfig = (): Promise<WalletConfig> =>
-  (config ??= fetch(`${gatewayUrl()}/wallet/config`).then((r) => (r.ok ? r.json() : { ramp: false }), () => ({ ramp: false })));
+export function walletConfig(refresh = false): Promise<WalletConfig> {
+  if (refresh) config = undefined;
+  return (config ??= fetch(`${gatewayUrl()}/wallet/config`)
+    .then(async (r) => ({ ramp: r.ok && (await r.json()).ramp === true }))
+    .catch(() => ({ ramp: false })));
+}
 
 // Anything that moves money bumps this, so every balance on screen refreshes.
 let version = 0;
@@ -63,7 +67,7 @@ export function useWallet(account: Account): { address: string; state?: WalletSt
   }, [address, v]);
   useEffect(() => {
     walletConfig().then(setCfg, () => undefined);
-  }, []);
+  }, [v]);
   return { address, state, error, config: cfg, refresh: useCallback(() => walletChanged(), []) };
 }
 

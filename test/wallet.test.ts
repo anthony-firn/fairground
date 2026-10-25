@@ -154,6 +154,10 @@ test('Transak sessions are made on the server; a first deposit buys ALGO; sales 
   assert.equal(wp(later).cryptoCurrencyCode, 'USDC');
   assert.equal(wp(first).walletAddress, buyer);
   assert.equal(wp(first).disableWalletAddressForm, true);
+  assert.equal(wp(first).paymentMethod, 'credit_debit_card', 'the purchase uses the requested card checkout');
+  assert.equal(wp(first).hideExchangeScreen, true, 'the app already collected the amount and wallet');
+  assert.equal(wp(later).paymentMethod, 'credit_debit_card');
+  assert.equal(wp(sell).paymentMethod, undefined, 'card purchases do not change cash-out payment methods');
   assert.equal(wp(first).network, 'mainnet', 'Transak identifies native ALGO with mainnet, not algorand');
   assert.equal(wp(later).network, 'algorand');
   assert.equal(first.headers.get('access-token'), 'token-1');

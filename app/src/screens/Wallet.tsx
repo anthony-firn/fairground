@@ -15,7 +15,7 @@ import { Field, Sheet, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
 import { payoutAddress } from '../lib/data.ts';
 import { balance, nowSeconds, timeAgo, usd } from '../lib/format.ts';
-import { getPaidHere, useSettle, useWallet } from '../lib/wallet.ts';
+import { getPaidHere, useSettle, useWallet, walletChanged, walletConfig } from '../lib/wallet.ts';
 import { LOCAL_PILOT } from '../lib/pilot.ts';
 
 const actions = () => import('../lib/walletActions.ts');
@@ -41,9 +41,8 @@ export function FirstDeposit({ compact }: { compact?: boolean }) {
   return (
     <div className="card stack">
       <strong>Set up your wallet with a first deposit</strong>
-      <span className="small">Choose an amount from your bank or card. The wallet keeps a small ALGO reserve for its account minimum
-        and network fees, and converts the rest to your dollar balance.</span>
-      {!compact && <span className="tiny muted">The first deposit arrives as ALGO. Your wallet automatically enables USDC before converting it. After that, deposits arrive as USDC.</span>}
+      <span className="small">Choose an amount and pay by card through Transak. Your wallet is set up automatically, keeping a small reserve for network fees.</span>
+      {!compact && <span className="tiny muted">Your deposit covers this wallet’s setup. Transak shows its charges before you pay.</span>}
       <button type="button" className="btn primary" onClick={() => setAdding(true)}>Add money</button>
       <button type="button" className="btn ghost" onClick={() => setReceiving(true)}>Transfer ALGO from another wallet</button>
       {adding && <RampSheet side="BUY" onClose={() => setAdding(false)} />}
@@ -68,6 +67,7 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
   const { address, state, config } = useWallet(account);
   const [amount, setAmount] = useState(initial ?? (side === 'BUY' ? '25' : state ? formatUsd(state.usdc) : ''));
   const [opened, setOpened] = useState(false);
+  const [checking, setChecking] = useState(false);
   const buy = side === 'BUY';
   // Until the wallet is set up, deposits arrive as ALGO, which it needs before it can hold dollars.
   const asset = buy && !state?.active ? 'ALGO' : 'USDC';
@@ -84,22 +84,26 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
       toast((e as Error).message);
     }
   }
+  if (buy && !config?.ramp) {
+    return (
+      <Sheet title="Add money" onClose={onClose}>
+        <p className="small">{config ? 'Card payments are temporarily unavailable. Please try again shortly.' : 'Checking card checkout…'}</p>
+        <button type="button" className="btn primary block" disabled={!config || checking} onClick={async () => {
+          setChecking(true);
+          try { await walletConfig(true); walletChanged(); }
+          finally { setChecking(false); }
+        }}>{checking ? 'Checking…' : 'Try again'}</button>
+      </Sheet>
+    );
+  }
   if (!config?.ramp) {
     return (
-      <Sheet title={buy ? 'Add money' : 'Cash out'} onClose={onClose}>
-        {buy ? (
-          <ol className="small stack" style={{ paddingLeft: 20, margin: 0 }}>
-            <li>At an exchange such as Kraken, buy {asset === 'ALGO' ? <><strong>ALGO</strong> (any amount over 1 ALGO)</> : <>USDC on Algorand</>}, paying from your bank.</li>
-            <li>Withdraw it to this address{asset === 'USDC' ? <>, choosing the <strong>Algorand</strong> network</> : ''}:<br /><code className="tiny" style={{ wordBreak: 'break-all' }}>{address}</code></li>
-            <li>{asset === 'ALGO' ? 'Open your wallet here once it arrives: it sets itself up and converts the ALGO to dollars.' : 'It shows here within seconds of the exchange sending it.'}</li>
-          </ol>
-        ) : (
-          <ol className="small stack" style={{ paddingLeft: 20, margin: 0 }}>
-            <li>At an exchange that supports USDC on Algorand, such as Kraken, find your USDC deposit address for the <strong>Algorand</strong> network.</li>
-            <li>Use <strong>Send</strong> here to send your USDC to that address.</li>
-            <li>Sell it for dollars at the exchange and withdraw to your bank.</li>
-          </ol>
-        )}
+      <Sheet title="Cash out" onClose={onClose}>
+        <ol className="small stack" style={{ paddingLeft: 20, margin: 0 }}>
+          <li>At an exchange that supports USDC on Algorand, such as Kraken, find your USDC deposit address for the <strong>Algorand</strong> network.</li>
+          <li>Use <strong>Send</strong> here to send your USDC to that address.</li>
+          <li>Sell it for dollars at the exchange and withdraw to your bank.</li>
+        </ol>
         <p className="tiny muted">Paying and cashing out inside Fairground, with a card or bank transfer, is coming soon.</p>
       </Sheet>
     );
@@ -107,13 +111,13 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
   return (
     <Sheet title={buy ? 'Add money' : 'Cash out'} onClose={onClose}>
       {opened ? (
-        <p className="small">{LOCAL_PILOT ? 'The Transak sandbox is open. Use its test details only; the demo balance here does not represent a real deposit or payout.' : buy ? `Finish in the Transak window. The money arrives here as soon as they send it, usually within minutes for a card and a few days for a bank transfer.${asset === 'ALGO' ? ' Keep this page open, or come back: the wallet sets itself up and converts it to dollars.' : ''}`
+        <p className="small">{LOCAL_PILOT ? 'The Transak sandbox is open. Use its test details only; the demo balance here does not represent a real deposit or payout.' : buy ? `Finish in the Transak window. Your deposit appears after Transak completes the purchase and delivers it.${asset === 'ALGO' ? ' Keep this page open, or come back: the wallet sets itself up and converts it to dollars.' : ''}`
           : 'Finish in the Transak window. When it asks you to send the USDC, you’ll come back here to confirm.'}</p>
       ) : (
         <>
           <Field label={buy ? 'Amount ($)' : 'Amount to cash out ($)'}><input type="text" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></Field>
-          {asset === 'ALGO' && <p className="small">This first deposit also sets up your wallet: it arrives as ALGO, automatically enables USDC, and converts the rest to dollars. A 0.5 ALGO reserve stays for the account minimum and fees.</p>}
-          <p className="small muted">{buy ? 'Pay by card or bank transfer through Transak, a licensed payments company; they verify your identity the first time. Fairground never sees your card or bank details and takes no fee.'
+          {asset === 'ALGO' && <p className="small">This first deposit also sets up your wallet automatically. A small reserve stays for setup and future network fees.</p>}
+          <p className="small muted">{buy ? 'Pay by card through Transak, a licensed payments company; they verify your identity the first time. Fairground never sees your card details and takes no fee.'
             : 'Transak pays your bank account; they verify your identity the first time. Fairground never sees your bank details and takes no fee.'}</p>
           {LOCAL_PILOT && <p className="small warn">Test checkout only. Use sandbox payment details; real transfers are disabled in this preview.</p>}
           <button type="button" className="btn primary block" disabled={!(Number(amount) > 0)} onClick={open}>{LOCAL_PILOT ? 'Open Transak sandbox' : 'Continue with Transak'}</button>

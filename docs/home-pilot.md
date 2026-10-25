@@ -38,6 +38,18 @@ recovery information is sent to Netlify or Transak.
 
 ## First deposit and automatic USDC setup
 
+The intended funding flow is **Add money → amount → Continue with Transak →
+card checkout**. The purchase session locks the card payment method and the
+wallet address, and skips Transak's currency-selection screen when an amount
+has already been entered. Transak may require identity verification before the
+first card payment. If checkout is unavailable, Add money shows that status and
+lets the user retry; it does not substitute exchange-transfer instructions.
+
+Production checkout requires Transak partner activation and backend IP/domain
+approval. A working staging checkout or successful partner-token authentication
+does not establish production approval. Sole proprietors are eligible to apply
+under Transak's partner terms; the operator still completes its KYB process.
+
 A new wallet has no ALGO and cannot yet hold USDC. The first purchase buys ALGO
 into the wallet on the user's device. While the wallet is open it polls for the
 deposit, signs its USDC opt-in locally, and converts the remaining ALGO to USDC,
