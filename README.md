@@ -256,8 +256,9 @@ Store releases need signing keys and developer accounts, which aren't part of th
 - **CPI attestations:** `.github/workflows/index.yml` publishes mid-month. Generate the publisher key once with
   `node tools/publish-index.ts --keygen > publisher.json`, store it as the `FAIRGROUND_INDEX_KEY` secret, and keep the
   public key in `src/defaults.ts` in step.
-- **Development fund:** `DEVELOPMENT_ADDRESS` in `src/defaults.ts` is unset until the project's wallet exists; until
-  then donations go only to relays.
+- **Development fund:** `DEVELOPMENT_ADDRESS` in `src/defaults.ts` is Anthony Firn's built-in Fairground wallet.
+  Its first ALGO deposit enables USDC through the normal wallet setup. Until it can receive USDC, donations go only
+  to relays. The same Fairground account and backup restore access to this wallet.
 
 | Path | Contents |
 |---|---|

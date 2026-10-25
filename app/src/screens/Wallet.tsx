@@ -6,6 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
+import { DEVELOPMENT_ADDRESS } from '@core/defaults.ts';
 import { algorandUsdc, isAlgorandAddress } from '@core/rails/algorand.ts';
 import type { Transfer } from '@core/rails/rail.ts';
 import { formatUsd, parseUsd } from '@core/pricing.ts';
@@ -241,6 +242,9 @@ export function WalletScreen({ query }: { query: URLSearchParams }) {
           <strong style={{ fontSize: 40 }}>{state ? balance(state.usdc) : '…'}</strong>
           <span className="tiny muted">Digital dollars (USDC). Only this account can move them.</span>
         </div>
+        {address === DEVELOPMENT_ADDRESS && (
+          <p className="card small">This wallet receives Fairground’s development donations.{state && !state.active ? ' Your first deposit also enables it to receive donations.' : ''}</p>
+        )}
         {error && <p className="small warn">{error}</p>}
         {state && !state.active && state.algo < SETUP_MICROALGOS && <FirstDeposit />}
         <SettleStatus />

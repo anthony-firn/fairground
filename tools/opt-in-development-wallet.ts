@@ -6,6 +6,10 @@ import { DEVELOPMENT_ADDRESS } from '../src/defaults.ts';
 import { MAINNET_GENESIS_HASH, USDC_ASSET_ID } from '../src/rails/algorand.ts';
 
 const path = homedir() + '/.config/fairground/development-wallet.json';
+const cfg = JSON.parse(readFileSync(path, 'utf8')) as { address: string; mnemonic: string };
+if (cfg.address !== DEVELOPMENT_ADDRESS) {
+  throw new Error('The standalone wallet is no longer the development fund. Open the owning Fairground account’s Wallet to complete its first-deposit setup.');
+}
 const algod = new algosdk.Algodv2('', 'https://mainnet-api.4160.nodely.dev', '');
 const watch = process.argv.includes('--watch');
 let announced = false;
@@ -27,7 +31,6 @@ while (true) {
       announced = true;
       if (!watch) break;
     } else {
-      const cfg = JSON.parse(readFileSync(path, 'utf8')) as { address: string; mnemonic: string };
       const keys = algosdk.mnemonicToSecretKey(cfg.mnemonic);
       if (cfg.address !== DEVELOPMENT_ADDRESS || keys.addr.toString() !== DEVELOPMENT_ADDRESS) throw new Error('development wallet key does not match the configured fund');
       if (account.authAddr && account.authAddr.toString() !== DEVELOPMENT_ADDRESS) throw new Error('development wallet is rekeyed');

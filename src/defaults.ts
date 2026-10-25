@@ -14,10 +14,10 @@ export const INDEX_PUBLISHER = 'd1243d5f1daabc712ad1366f4934797189e22805fad0e8b8
 export const DEFAULT_INDEX_POLICY: IndexPolicy = { index: DEFAULT_INDEX, publishers: [INDEX_PUBLISHER], threshold: 1 };
 
 /**
- * Fairground's development fund, a USDC account on Algorand. Clients check that it can receive USDC before offering
- * it, and send the whole donation to relays when it can't.
+ * Fairground's development fund is the built-in wallet of Anthony Firn's Fairground account. Its first deposit
+ * enables USDC through the normal wallet setup. Clients offer it only once it can receive USDC.
  */
-export const DEVELOPMENT_ADDRESS: string | undefined = 'UUUBTFPPZGTNNVO5YFYCHDCALODLLS3FWZAZOFWJ7R4KHUGTPAR6WEVSDE';
+export const DEVELOPMENT_ADDRESS: string | undefined = 'WMQHGXHHWQVUN2VIZQJ5OO2GSH5Q33CVABJUCLJHP4UHLTTMS2HE3W6FEM';
 
 /**
  * The public podcast gateway: RSS feeds for Apple Podcasts, Spotify and every other podcast app, with host-read ads

@@ -23,16 +23,18 @@ Local user services:
 
 - `fairground-live-gateway`: production gateway on `127.0.0.1:18872`.
 - `fairground-payment-tunnel`: temporary HTTPS tunnel to that service.
-- `fairground-donation-optin`: waits for ALGO at the configured development
-  wallet, then submits only its zero-amount USDC self-transfer opt-in.
+- `fairground-donation-optin`: retired standalone-wallet watcher; leave it
+  stopped. The donation destination is now the owner's built-in wallet.
 - `fairground-local-pilot`: separate staging preview on localhost; it remains
   simulated and cannot transfer real money.
 
 Private configuration is under `~/.config/evolvetech/`, with production
 credentials in `transak.env`, routing state in `live-gateway.json`, and a
-private process launcher in `run-live-gateway.py`. The donation wallet recovery
-information stays in `~/.config/fairground/development-wallet.json`; it is never
-sent to Netlify or Transak.
+private process launcher in `run-live-gateway.py`. The former standalone wallet's
+recovery information remains in `~/.config/fairground/development-wallet.json`
+for recovery only; that address is no longer the donation destination. The
+current fund is restored with Anthony Firn's Fairground account. No account
+recovery information is sent to Netlify or Transak.
 
 ## First deposit and automatic USDC setup
 
@@ -43,10 +45,14 @@ keeping a 0.5 ALGO reserve. The opt-in increases the network's minimum balance;
 it cannot be completed while the wallet is unfunded. No other user's wallet or
 the project fund subsidizes this setup.
 
-The project donation wallet has a separate balance and requires its own ALGO
-minimum and opt-in fee. Its watcher does not fund it or move donations out; it
-only opts it into mainnet USDC once sufficient ALGO arrives. A zero-balance
-destination cannot be made USDC-ready by configuration alone.
+The project donation destination is now Anthony Firn's built-in Fairground
+wallet, `WMQHGXHHWQVUN2VIZQJ5OO2GSH5Q33CVABJUCLJHP4UHLTTMS2HE3W6FEM`.
+Restore the saved Anthony Firn account before funding it. Its public Fairground
+key is `f4c573821c8bfbebf8f395f6b6b84e2348ac79ad798255a1fb1fb935b6399f52`.
+The wallet screen identifies it as the development donation destination. The
+normal first-deposit setup enables USDC on this same wallet, after which other
+users can donate to it. No separate activation watcher is needed. Personal funds
+and development donations share this wallet and its balance.
 
 If card checkout is not yet activated by Transak, open Wallet and choose
 **Transfer ALGO from another wallet**. Copy the displayed address or scan its QR
