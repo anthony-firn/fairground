@@ -32,13 +32,10 @@ import { About, AccountScreen, FeedSettings, PersonalSettings, RelaysScreen, Sup
 const { account, isNew } = loadOrCreateAccount();
 onChange(scheduleSync);
 
-// Coming back from Transak (buying or cashing out) lands on the wallet; the order details ride in the query string.
+// Meld returns to the URL supplied by us. The saved session, not callback parameters, identifies a cash-out.
 {
   const back = new URLSearchParams(location.search);
-  if (back.get('ramp')) {
-    const orderId = back.get('orderId');
-    history.replaceState(null, '', `${location.pathname}#/wallet${back.get('ramp') === 'sell' && orderId ? `?orderId=${encodeURIComponent(orderId)}` : ''}`);
-  }
+  if (back.get('ramp')) history.replaceState(null, '', `${location.pathname}#/wallet`);
 }
 
 function currentRoute() {

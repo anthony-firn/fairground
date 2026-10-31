@@ -1,111 +1,182 @@
 /**
- * Dollars in and out, through Transak, a licensed on- and off-ramp that handles identity checks, cards and bank
- * transfers. Buying sends crypto straight to the person's own wallet; selling has the person's wallet send USDC to
- * Transak, which pays their bank. Fairground never holds money or bank details, and these server calls only create
- * widget sessions and read the person's own orders, with the partner credentials kept on the gateway.
+ * Meld's retail ramp API, version 2026-02-03. API credentials stay on the gateway; providers collect KYC and
+ * card/bank details in their hosted checkout. Algorand wallet keys and signing stay on the user's device.
+ * Contract: https://docs.meld.io/docs/stablecoins/white-label-api-integration/whitelabel-api-guide/index
  */
+import { isAlgorandAddress } from './rails/algorand.ts';
+import { parseUsd } from './pricing.ts';
 
 export interface RampOptions {
   apiKey: string;
-  apiSecret: string;
-  environment: 'staging' | 'production';
-  /** The site the widget is opened from, as registered with Transak. */
-  referrerDomain: string;
+  environment: 'sandbox' | 'production';
+  /** Named suppliers and canonical Algorand currency IDs confirmed with Meld. No automatic supplier fallback. */
+  buyProvider: string;
+  sellProvider: string;
+  algoCurrencyCode: string;
+  usdcCurrencyCode: string;
+  sellPaymentMethod: string;
+  /** Optional account-specific Meld checkout origins, for a white-labelled checkout domain. */
+  checkoutOrigins?: string[];
   fetch?: typeof fetch;
+}
+
+export interface RampSession {
+  id: string;
+  externalSessionId: string;
+  url: string;
+  environment: 'sandbox' | 'production';
 }
 
 export interface RampOrder {
   id: string;
+  sessionId: string;
+  externalSessionId: string;
   status: string;
-  side: 'BUY' | 'SELL';
+  side: 'BUY' | 'SELL' | 'UNKNOWN';
   cryptoCurrency: string;
   network: string;
-  cryptoAmount: number;
+  /** Decimal strings preserve the exact amount used for a cash-out transfer. */
+  cryptoAmount: string;
   fiatAmount: number;
   fiatCurrency: string;
-  /** For a sale, where the person's wallet sends the USDC. */
   walletAddress: string;
-  customer?: string;
+  sourceWalletAddress: string;
+  customer: string;
+  provider: string;
+  environment: 'sandbox' | 'production';
 }
 
-const HOSTS = {
-  staging: { api: 'https://api-stg.transak.com', gateway: 'https://api-gateway-stg.transak.com' },
-  production: { api: 'https://api.transak.com', gateway: 'https://api-gateway.transak.com' },
-};
+export interface RampRequest {
+  side: 'BUY' | 'SELL';
+  walletAddress: string;
+  customer: string;
+  amount: number;
+  redirectURL: string;
+  userIp: string;
+  asset: 'USDC' | 'ALGO';
+  countryCode: string;
+  subdivision?: string;
+}
 
-/** Statuses of a sale that is waiting for the person's USDC. */
-export const AWAITING_CRYPTO = ['AWAITING_PAYMENT_FROM_USER', 'PROCESSING'];
+const HOSTS = { sandbox: 'https://api-sb.meld.io', production: 'https://api.meld.io' };
+const identifier = /^[A-Za-z0-9_-]{6,128}$/;
+export const sessionPrefix = (customer: string) => `fairground-${customer}-`;
+const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+const text = (v: unknown) => typeof v === 'string' ? v : '';
 
 export function createRamp(opts: RampOptions) {
-  const hosts = HOSTS[opts.environment];
+  if (!HOSTS[opts.environment]) throw new Error('invalid Meld environment');
+  for (const value of [opts.buyProvider, opts.sellProvider, opts.algoCurrencyCode, opts.usdcCurrencyCode, opts.sellPaymentMethod]) {
+    if (!/^[A-Z0-9_:-]+$/.test(value)) throw new Error('configure the approved Meld suppliers, payment method and Algorand currency IDs');
+  }
+  if (opts.algoCurrencyCode === opts.usdcCurrencyCode) throw new Error('ALGO and Algorand USDC need distinct Meld currency IDs');
   const fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
-  let token: { value: string; expires: number } | undefined;
+  const origins = opts.checkoutOrigins ?? ['https://meldcrypto.com'];
+  const assetChecks = new Map<string, number>();
 
-  /** The partner access token, valid for a week; refreshed only when it expires. */
-  async function accessToken(): Promise<string> {
-    if (token && token.expires > Date.now() / 1000 + 300) return token.value;
-    const res = await fetchImpl(`${hosts.api}/partners/api/v2/refresh-token`, {
-      method: 'POST', headers: { 'x-api-key': opts.apiKey, 'api-secret': opts.apiSecret, 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey: opts.apiKey }),
+  async function call(path: string, body?: unknown): Promise<Record<string, unknown>> {
+    const response = await fetchImpl(HOSTS[opts.environment] + path, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { Authorization: `BASIC ${opts.apiKey}`, 'Meld-Version': '2026-02-03', Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      redirect: 'error', signal: AbortSignal.timeout(20_000),
     });
-    if (!res.ok) throw new Error(`Transak refused the partner credentials (${res.status})`);
-    const body = (await res.json()) as { data?: { accessToken?: string; expiresAt?: number }; accessToken?: string; expiresAt?: number };
-    const value = body.data?.accessToken ?? body.accessToken;
-    if (!value) throw new Error('Transak returned no access token');
-    token = { value, expires: body.data?.expiresAt ?? body.expiresAt ?? Date.now() / 1000 + 86400 };
-    return value;
+    if (!response.ok) {
+      // Provider response bodies can contain private data. Return only a stable error and support reference.
+      const error = record(await response.json().catch(() => ({})));
+      const code = /^[A-Z0-9_]{1,100}$/.test(text(error.code)) ? `: ${error.code}` : '';
+      const ref = /^[A-Za-z0-9_-]{1,100}$/.test(text(error.requestId)) ? ` (reference ${error.requestId})` : '';
+      throw new Error(`Meld could not complete this request (${response.status}${code})${ref}`);
+    }
+    return record(await response.json());
+  }
+
+  async function checkAsset(p: RampRequest, currency: string, provider: string): Promise<void> {
+    const category = p.side === 'BUY' ? 'CRYPTO_ONRAMP' : 'CRYPTO_OFFRAMP';
+    const query = new URLSearchParams({ category, country: p.countryCode, type: 'CRYPTO', partner: provider });
+    const key = `${query}:${currency}`;
+    if ((assetChecks.get(key) ?? 0) > Date.now()) return;
+    const catalog = await call(`/network-partner/supported/currencies?${query}`);
+    const matches = (Array.isArray(catalog.currencies) ? catalog.currencies : []).map(record).filter((c) => c.currencyCode === currency);
+    // A ticker alone cannot distinguish native Algorand USDC from an identically named token on another chain.
+    if (!matches.length || matches.some((c) =>
+      !['ALGO', 'ALGORAND'].includes(text(c.chainCode).toUpperCase()) ||
+      (p.asset === 'USDC' ? String(c.contract) !== '31566704' : !!c.contract),
+    )) throw new Error('Meld currency metadata does not uniquely identify the requested native Algorand asset');
+    assetChecks.set(key, Date.now() + 300_000);
   }
 
   return {
-    /**
-     * A single-use widget link, valid for five minutes. A wallet's first deposit buys ALGO, which it needs before it can
-     * hold USDC; after that, deposits buy USDC.
-     */
-    async session(p: { side: 'BUY' | 'SELL'; walletAddress: string; customer: string; fiatAmount?: number; cryptoAmount?: number; redirectURL: string; userIp: string; email?: string; asset?: 'USDC' | 'ALGO' }): Promise<string> {
-      const widgetParams: Record<string, unknown> = {
-        apiKey: opts.apiKey, referrerDomain: opts.referrerDomain, productsAvailed: p.side, network: p.side === 'BUY' && p.asset === 'ALGO' ? 'mainnet' : 'algorand', cryptoCurrencyCode: p.side === 'BUY' ? p.asset ?? 'USDC' : 'USDC',
-        fiatCurrency: 'USD', partnerCustomerId: p.customer, redirectURL: p.redirectURL, hideMenu: true, themeColor: 'd9480f',
-      };
-      if (p.side === 'BUY') Object.assign(widgetParams, {
-        walletAddress: p.walletAddress, disableWalletAddressForm: true,
-        paymentMethod: 'credit_debit_card', hideExchangeScreen: !!p.fiatAmount,
-        ...(p.fiatAmount ? { fiatAmount: p.fiatAmount } : {}),
+    async session(p: RampRequest): Promise<RampSession> {
+      if (!isAlgorandAddress(p.walletAddress) || !Number.isFinite(p.amount) || p.amount <= 0 || p.amount > 1_000_000 || !/^[A-Z]{2}$/.test(p.countryCode)) throw new Error('invalid checkout request');
+      try { if (parseUsd(String(p.amount)) <= 0n) throw new Error(); } catch { throw new Error('invalid checkout amount'); }
+      const buy = p.side === 'BUY';
+      if (!buy && p.asset !== 'USDC') throw new Error('cash out USDC on Algorand only');
+      const currency = p.asset === 'ALGO' ? opts.algoCurrencyCode : opts.usdcCurrencyCode;
+      const provider = buy ? opts.buyProvider : opts.sellProvider;
+      await checkAsset(p, currency, provider);
+      const paymentMethodType = buy ? 'CREDIT_DEBIT_CARD' : opts.sellPaymentMethod;
+      const pair = { sourceCurrencyCode: buy ? 'USD' : currency, destinationCurrencyCode: buy ? currency : 'USD' };
+      // Ask only the configured supplier. Never silently switch networks, suppliers or introduce a bridge/swap.
+      const quotes = await call('/payments/crypto/quote', {
+        ...pair, countryCode: p.countryCode, ...(p.subdivision ? { subdivision: p.subdivision } : {}),
+        sourceAmount: p.amount, paymentMethodType, walletAddress: p.walletAddress, externalCustomerId: p.customer,
+        serviceProviders: [provider],
       });
-      else Object.assign(widgetParams, { walletRedirection: true, ...(p.cryptoAmount ? { cryptoAmount: p.cryptoAmount } : {}) });
-      if (p.email) widgetParams.email = p.email;
-      const res = await fetchImpl(`${hosts.gateway}/api/v2/auth/session`, {
-        method: 'POST',
-        headers: { 'x-api-key': opts.apiKey, 'access-token': await accessToken(), 'x-user-ip': p.userIp, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ widgetParams }),
+      const quote = (Array.isArray(quotes.quotes) ? quotes.quotes : []).map(record).find((q) =>
+        q.serviceProvider === provider && q.transactionType === (buy ? 'CRYPTO_PURCHASE' : 'CRYPTO_SELL') &&
+        q.sourceCurrencyCode === pair.sourceCurrencyCode && q.destinationCurrencyCode === pair.destinationCurrencyCode &&
+        q.paymentMethodType === paymentMethodType && Number(q.destinationAmount) > 0,
+      );
+      if (!quote) throw new Error('No eligible Meld quote for this amount, location and Algorand asset. Try a different amount or contact support.');
+      const externalSessionId = sessionPrefix(p.customer) + crypto.randomUUID();
+      const result = await call('/crypto/session/widget', {
+        sessionType: p.side, externalCustomerId: p.customer, externalSessionId,
+        sessionData: {
+          ...pair, countryCode: p.countryCode, sourceAmount: String(p.amount), paymentMethodType, serviceProvider: provider,
+          walletAddress: p.walletAddress, clientIpAddress: p.userIp, redirectUrl: p.redirectURL,
+          lockFields: ['walletAddress', 'sourceCurrencyCode', 'destinationCurrencyCode', 'sourceAmount', 'paymentMethodType'],
+          ...(!buy ? { redirectFlow: true } : {}),
+        },
       });
-      if (!res.ok) {
-        const error = await res.json().catch(() => ({})) as { error?: unknown };
-        if (res.status === 401 && error.error === 'invalid_api_key') throw new Error('Card checkout is awaiting Transak activation. Please try again once it is enabled.');
-        throw new Error(`Transak couldn’t start a session (${res.status})`);
-      }
-      const url = ((await res.json()) as { data?: { widgetUrl?: string } }).data?.widgetUrl;
-      if (!url?.startsWith('https://')) throw new Error('Transak returned no widget link');
-      return url;
+      const url = new URL(text(result.widgetUrl));
+      if (url.protocol !== 'https:' || url.username || url.password || !origins.includes(url.origin)) throw new Error('Meld returned an unexpected checkout origin');
+      if (!identifier.test(text(result.id)) || result.externalSessionId !== externalSessionId || result.externalCustomerId !== p.customer) throw new Error('Meld returned a different checkout session');
+      return { id: text(result.id), externalSessionId, url: url.href, environment: opts.environment };
     },
 
-    async order(id: string): Promise<RampOrder> {
-      if (!/^[A-Za-z0-9-]{6,80}$/.test(id)) throw new Error('not an order id');
-      const res = await fetchImpl(`${hosts.api}/partners/api/v2/order/${id}`, { headers: { 'x-api-key': opts.apiKey, 'access-token': await accessToken() } });
-      if (!res.ok) throw new Error(`Transak couldn’t find the order (${res.status})`);
-      const d = (((await res.json()) as { data?: Record<string, unknown> }).data ?? {}) as Record<string, unknown>;
+    /** Look up by the Meld session saved before checkout; redirects do not supply authoritative order information. */
+    async order(sessionId: string): Promise<RampOrder> {
+      if (!identifier.test(sessionId)) throw new Error('not a Meld session id');
+      const result = await call(`/payments/transactions/sessions/${encodeURIComponent(sessionId)}`);
+      const d = record(result.transaction);
+      const details = record(d.cryptoDetails);
+      if (!text(d.id) || d.sessionId !== sessionId) throw new Error('Meld returned a different transaction session');
+      const side = d.transactionType === 'CRYPTO_SELL' ? 'SELL' : d.transactionType === 'CRYPTO_PURCHASE' ? 'BUY' : 'UNKNOWN';
+      const currency = side === 'SELL' ? d.sourceCurrencyCode : d.destinationCurrencyCode;
       return {
-        id, status: String(d.status ?? ''), side: d.isBuyOrSell === 'SELL' ? 'SELL' : 'BUY', cryptoCurrency: String(d.cryptoCurrency ?? ''), network: String(d.network ?? ''),
-        cryptoAmount: Number(d.cryptoAmount ?? 0), fiatAmount: Number(d.fiatAmount ?? 0), fiatCurrency: String(d.fiatCurrency ?? ''), walletAddress: String(d.walletAddress ?? ''),
-        customer: typeof d.partnerCustomerId === 'string' ? d.partnerCustomerId : undefined,
+        id: text(d.id), sessionId, externalSessionId: text(d.externalSessionId), status: text(d.status), side,
+        cryptoCurrency: currency === opts.usdcCurrencyCode ? 'USDC' : currency === opts.algoCurrencyCode ? 'ALGO' : text(currency),
+        network: currency === opts.usdcCurrencyCode || currency === opts.algoCurrencyCode ? 'algorand' : '',
+        cryptoAmount: String((side === 'SELL' ? d.sourceAmount : d.destinationAmount) ?? ''),
+        fiatAmount: Number(side === 'SELL' ? d.destinationAmount : d.sourceAmount),
+        fiatCurrency: text(side === 'SELL' ? d.destinationCurrencyCode : d.sourceCurrencyCode),
+        walletAddress: text(details.destinationWalletAddress), sourceWalletAddress: text(details.sourceWalletAddress),
+        customer: text(d.externalCustomerId), provider: text(d.serviceProvider), environment: opts.environment,
       };
     },
+    sellProvider: opts.sellProvider,
   };
 }
 
-/** Why a sale shouldn't be paid into, if anything: it must be this person's, waiting for USDC on Algorand. */
+/** A cash-out must be owned, pending, in the exact configured Algorand asset, with a real provider deposit address. */
 export function sellOrderProblem(order: RampOrder, customer: string): string | undefined {
   if (order.side !== 'SELL') return 'that isn’t a cash-out order';
-  if (order.customer && order.customer !== customer) return 'that order belongs to someone else';
-  if (order.cryptoCurrency.toUpperCase() !== 'USDC' || order.network.toLowerCase() !== 'algorand') return 'that order isn’t for USDC on Algorand';
-  if (!AWAITING_CRYPTO.includes(order.status)) return `that order isn’t waiting for payment (${order.status.toLowerCase().replace(/_/g, ' ')})`;
-  if (!(order.cryptoAmount > 0) || !order.walletAddress) return 'that order has no amount or address';
+  if (order.customer !== customer || !order.externalSessionId.startsWith(sessionPrefix(customer))) return 'that order belongs to someone else or has no verified owner';
+  if (order.cryptoCurrency !== 'USDC' || order.network !== 'algorand' || order.fiatCurrency !== 'USD') return 'that order isn’t for USDC on Algorand to USD';
+  if (order.status !== 'PENDING') return `that order isn’t waiting for payment (${order.status.toLowerCase().replace(/_/g, ' ')})`;
+  if (!isAlgorandAddress(order.walletAddress) || !isAlgorandAddress(order.sourceWalletAddress) || order.walletAddress === order.sourceWalletAddress) return 'that order has no valid provider deposit address';
+  try { if (parseUsd(order.cryptoAmount) <= 0n) return 'that order has no valid crypto amount'; }
+  catch { return 'that order has no valid crypto amount'; }
+  if (!Number.isFinite(order.fiatAmount) || order.fiatAmount <= 0) return 'that order has no fiat payout';
 }

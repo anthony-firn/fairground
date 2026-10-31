@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import { randomBytes } from '@noble/hashes/utils.js';
 import { createAlgorandUsdcRail, encodeAddress, isAlgorandAddress, parseIndexerTransaction, paymentLink } from '../src/rails/algorand.ts';
 
+import { transferProblem } from '../src/rails/rail.ts';
+
 /** A real mainnet USDC transfer, as returned by the public indexer. */
 const fixture = () => JSON.parse(readFileSync(new URL('./fixtures/usdc-transfer.json', import.meta.url), 'utf8'));
 const TXID = 'ETECK546NQE7WWEMKP4KRJ3HQNU3746L6EVCVIHEKFKPEGAVVZDA';
@@ -90,4 +92,14 @@ test('outgoing transfers are listed by sender', async () => {
   const found = await rail.listTransfers({ address: from, role: 'sender', notePrefix: 'fairground:support:', from: 0, to: 2_000_000_000 });
   assert.equal(role, 'sender');
   assert.deepEqual(found.map((t) => t.sender), [from]);
+});
+
+test('pasted external payments must match the recipient, exact note, amount and current request time', () => {
+  const request = { to: 'recipient', amount: 5_000_000n, memo: 'fairground:development' };
+  const transfer = { id: TXID, sender: 'external-donor', receiver: request.to, amount: request.amount, note: request.memo, time: 1000 };
+  assert.equal(transferProblem(request, transfer, 900), undefined);
+  assert.equal(transferProblem(request, { ...transfer, amount: 6_000_000n }, 900), undefined);
+  for (const change of [{ receiver: 'someone-else' }, { note: 'wrong' }, { amount: 4_999_999n }, { time: 800 }]) {
+    assert.ok(transferProblem(request, { ...transfer, ...change }, 900));
+  }
 });

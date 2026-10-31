@@ -18,15 +18,21 @@ export function myWalletAddress(account: Account): string {
 }
 
 export interface WalletConfig {
-  /** Whether buying and selling through Transak is set up. */
+  /** Whether the gateway has configured Meld routes. */
   ramp: boolean;
+  provider?: 'meld';
+  environment?: 'sandbox' | 'production';
 }
 
 let config: Promise<WalletConfig> | undefined;
 export function walletConfig(refresh = false): Promise<WalletConfig> {
   if (refresh) config = undefined;
   return (config ??= fetch(`${gatewayUrl()}/wallet/config`)
-    .then(async (r) => ({ ramp: r.ok && (await r.json()).ramp === true }))
+    .then(async (r) => {
+      if (!r.ok) return { ramp: false };
+      const value = await r.json();
+      return { ramp: value.ramp === true && value.provider === 'meld', provider: value.provider, environment: value.environment };
+    })
     .catch(() => ({ ramp: false })));
 }
 
@@ -95,3 +101,25 @@ export function useSettle(account: Account, state: WalletState | undefined): { s
   return { status, error, retry: () => setAttempt((n) => n + 1) };
 }
 const settling = new Set<string>();
+
+/** Persist the session before opening checkout: Meld returns to our URL without adding an order ID. */
+export interface PendingRamp {
+  id: string;
+  externalSessionId: string;
+  side: 'BUY' | 'SELL';
+  walletAddress: string;
+  amount: number;
+  environment: 'sandbox' | 'production';
+}
+export const pendingRamps = (account: Account) => load<PendingRamp[]>(`meld-sessions-${account.pubkey}`, []);
+export function pendingRamp(account: Account, id?: string): PendingRamp | undefined {
+  const sessions = pendingRamps(account);
+  return id ? sessions.find((s) => s.id === id) : sessions.findLast((s) => s.side === 'SELL') ?? sessions.at(-1);
+}
+export function rememberRamp(account: Account, session: PendingRamp): void {
+  const sessions = pendingRamps(account);
+  save(`meld-sessions-${account.pubkey}`, [...sessions.filter((s) => s.id !== session.id && s.side === 'SELL'), session]);
+}
+export function forgetRamp(account: Account, id: string): void {
+  save(`meld-sessions-${account.pubkey}`, pendingRamps(account).filter((s) => s.id !== id));
+}

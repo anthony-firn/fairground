@@ -12,6 +12,7 @@ import { confirmed, convertibleAlgo, feesLeft, needsFeeTopUp, RESERVE_MICROALGOS
 import { startDevRelay } from '../tools/dev-relay.ts';
 import { ALGOD, createFakeChain, createFakeRouter, INDEXER } from './fakechain.ts';
 import { actor } from './helpers.ts';
+import { fakeMeld, MELD_TEST_OPTIONS } from './fakemeld.ts';
 
 test('the wallet key comes from the account key, so the backup restores it', () => {
   const key = generateSecretKey();
@@ -122,102 +123,126 @@ test('signed HTTP requests (NIP-98) name the URL, method and body, and expire', 
   assert.match((verifyAuthHeader(null, url, 'POST') as { error: string }).error, /missing/);
 });
 
-/** Transak's partner API, as far as the gateway uses it. */
-function fakeTransak(customer: string, wallet: string) {
-  const calls: { url: string; headers: Headers; body?: Record<string, unknown> }[] = [];
-  const fetchImpl: typeof fetch = async (input, init) => {
-    const url = String(input);
-    calls.push({ url, headers: new Headers(init?.headers), body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    if (url.endsWith('/partners/api/v2/refresh-token')) return Response.json({ data: { accessToken: 'token-1', expiresAt: Math.floor(Date.now() / 1000) + 7 * 86400 } });
-    if (url.endsWith('/api/v2/auth/session')) return Response.json({ data: { widgetUrl: 'https://global-stg.transak.com/?sessionId=s1' } });
-    if (url.includes('/partners/api/v2/order/')) {
-      return Response.json({ data: { status: 'AWAITING_PAYMENT_FROM_USER', isBuyOrSell: 'SELL', cryptoCurrency: 'USDC', network: 'algorand', cryptoAmount: 10, fiatAmount: 9.8, fiatCurrency: 'USD', walletAddress: wallet, partnerCustomerId: customer } });
-    }
-    return new Response('no', { status: 404 });
-  };
-  return { fetch: fetchImpl, calls };
-}
-
-test('Transak sessions are made on the server; a first deposit buys ALGO; sales are checked before the wallet pays', async () => {
+test('Meld sessions use private versioned API calls, exact Algorand currency IDs and explicit suppliers', async () => {
   const member = actor();
-  const deposit = walletKeys(generateSecretKey()).address;
-  const t = fakeTransak(member.pubkey, deposit);
-  const ramp = createRamp({ apiKey: 'key', apiSecret: 'secret', environment: 'staging', referrerDomain: 'www.evolvetech.dev', fetch: t.fetch });
   const buyer = walletKeys(member.nostrKey).address;
-  assert.equal(await ramp.session({ side: 'BUY', walletAddress: buyer, customer: member.pubkey, fiatAmount: 25, redirectURL: 'https://app.test/', userIp: '1.2.3.4', asset: 'ALGO' }), 'https://global-stg.transak.com/?sessionId=s1');
-  await ramp.session({ side: 'BUY', walletAddress: buyer, customer: member.pubkey, fiatAmount: 25, redirectURL: 'https://app.test/', userIp: '1.2.3.4' });
-  await ramp.session({ side: 'SELL', walletAddress: buyer, customer: member.pubkey, cryptoAmount: 10, redirectURL: 'https://app.test/', userIp: '1.2.3.4' });
-  assert.equal(t.calls.filter((c) => c.url.endsWith('refresh-token')).length, 1, 'the partner token is reused');
-  const [first, later, sell] = t.calls.filter((c) => c.url.endsWith('/auth/session'));
-  const wp = (c: typeof first) => c.body!.widgetParams as Record<string, unknown>;
-  assert.equal(wp(first).cryptoCurrencyCode, 'ALGO', 'the first deposit buys ALGO');
-  assert.equal(wp(later).cryptoCurrencyCode, 'USDC');
-  assert.equal(wp(first).walletAddress, buyer);
-  assert.equal(wp(first).disableWalletAddressForm, true);
-  assert.equal(wp(first).paymentMethod, 'credit_debit_card', 'the purchase uses the requested card checkout');
-  assert.equal(wp(first).hideExchangeScreen, true, 'the app already collected the amount and wallet');
-  assert.equal(wp(later).paymentMethod, 'credit_debit_card');
-  assert.equal(wp(sell).paymentMethod, undefined, 'card purchases do not change cash-out payment methods');
-  assert.equal(wp(first).network, 'mainnet', 'Transak identifies native ALGO with mainnet, not algorand');
-  assert.equal(wp(later).network, 'algorand');
-  assert.equal(first.headers.get('access-token'), 'token-1');
-  assert.equal(first.headers.get('api-secret'), null, 'the secret goes only to the token endpoint');
-  assert.equal(wp(sell).walletRedirection, true);
-  assert.equal(wp(sell).cryptoCurrencyCode, 'USDC');
-
-  const order = await ramp.order('order-123');
+  const t = fakeMeld(walletKeys(generateSecretKey()).address);
+  const ramp = createRamp({ ...MELD_TEST_OPTIONS, environment: 'sandbox', fetch: t.fetch });
+  const request = { side: 'BUY' as const, walletAddress: buyer, customer: member.pubkey, amount: 25, redirectURL: 'https://app.test/', userIp: '1.2.3.4', asset: 'ALGO' as const, countryCode: 'US', subdivision: 'US-CA' };
+  const first = await ramp.session(request);
+  assert.equal(first.url, 'https://meldcrypto.com/?token=session-1');
+  assert.equal(first.environment, 'sandbox');
+  await ramp.session({ ...request, asset: 'USDC' });
+  const sell = await ramp.session({ ...request, side: 'SELL', asset: 'USDC', amount: 10 });
+  const sessions = t.calls.filter((c) => c.url.endsWith('/crypto/session/widget'));
+  const data = sessions.map((c) => c.body!.sessionData as Record<string, unknown>);
+  assert.equal(data[0].destinationCurrencyCode, 'ALGO');
+  assert.equal(data[1].destinationCurrencyCode, 'USDC_ALGORAND');
+  assert.equal(data[2].sourceCurrencyCode, 'USDC_ALGORAND');
+  assert.equal(data[2].destinationCurrencyCode, 'USD');
+  assert.equal(data[2].redirectFlow, true);
+  assert.equal(data[0].sourceAmount, '25');
+  assert.equal(data[0].walletAddress, buyer);
+  assert.equal(data[0].clientIpAddress, '1.2.3.4');
+  assert.equal(data[0].paymentMethodType, 'CREDIT_DEBIT_CARD');
+  assert.equal(data[2].paymentMethodType, 'ACH');
+  assert.deepEqual(data[0].lockFields, ['walletAddress', 'sourceCurrencyCode', 'destinationCurrencyCode', 'sourceAmount', 'paymentMethodType']);
+  assert.notEqual(first.externalSessionId, sell.externalSessionId);
+  for (const c of t.calls) {
+    assert.ok(c.url.startsWith('https://api-sb.meld.io/'));
+    assert.equal(c.headers.get('Authorization'), 'BASIC test-key');
+    assert.equal(c.headers.get('Meld-Version'), '2026-02-03');
+  }
+  const quote = t.calls.find((c) => c.url.endsWith('/payments/crypto/quote'))!;
+  assert.deepEqual(quote.body!.serviceProviders, ['TEST_BUY']);
+  assert.equal(quote.body!.subdivision, 'US-CA');
+  const order = await ramp.order(sell.id);
   assert.equal(sellOrderProblem(order, member.pubkey), undefined);
-  assert.match(sellOrderProblem(order, actor().pubkey) ?? '', /someone else/);
-  assert.match(sellOrderProblem({ ...order, status: 'COMPLETED' }, member.pubkey) ?? '', /isn’t waiting/);
-  assert.match(sellOrderProblem({ ...order, network: 'ethereum' }, member.pubkey) ?? '', /USDC on Algorand/);
+  assert.equal(order.sourceWalletAddress, buyer);
+  assert.equal(order.cryptoAmount, '10');
+  for (const change of [
+    { customer: '' }, { customer: actor().pubkey }, { externalSessionId: 'unrelated' },
+    { network: 'ethereum' }, { cryptoCurrency: 'USDC_ETH' }, { side: 'UNKNOWN' as const },
+    { status: 'SETTLING' }, { status: 'SETTLED' }, { status: 'FAILED' },
+    { walletAddress: buyer }, { walletAddress: 'invalid' }, { cryptoAmount: 'NaN' },
+    { cryptoAmount: '0.0000001' }, { fiatAmount: Infinity },
+  ]) assert.ok(sellOrderProblem({ ...order, ...change }, member.pubkey), JSON.stringify(change));
 });
 
-test('the gateway opens Transak only for signed requests from Fairground members', async () => {
+test('Meld does not fall back to unapproved suppliers, chains, swap routes or untrusted checkout URLs', async () => {
+  const member = actor();
+  const t = fakeMeld(walletKeys(generateSecretKey()).address);
+  const ramp = createRamp({ ...MELD_TEST_OPTIONS, fetch: t.fetch });
+  const request = { side: 'BUY' as const, walletAddress: walletKeys(member.nostrKey).address, customer: member.pubkey, amount: 25, redirectURL: 'https://app.test/', userIp: '1.2.3.4', asset: 'ALGO' as const, countryCode: 'US' };
+  for (const patch of [{ serviceProvider: 'OTHER' }, { destinationCurrencyCode: 'USDC_ETH' }, { transactionType: 'CRYPTO_PURCHASE_SWAP' }, { paymentMethodType: 'ACH' }]) {
+    t.quotePatch = patch;
+    await assert.rejects(ramp.session(request), /No eligible Meld quote/);
+  }
+  t.quotePatch = {};
+  t.emptyQuotes = true;
+  await assert.rejects(ramp.session(request), /No eligible Meld quote/);
+  t.emptyQuotes = false;
+  t.responsePatch = { widgetUrl: 'https://attacker.test/checkout' };
+  await assert.rejects(ramp.session(request), /unexpected checkout origin/);
+  t.responsePatch = { externalCustomerId: actor().pubkey };
+  await assert.rejects(ramp.session(request), /different checkout session/);
+  for (const amount of [NaN, Infinity, -1, 0]) await assert.rejects(ramp.session({ ...request, amount }), /invalid checkout/);
+  const count = t.calls.length;
+  await assert.rejects(ramp.order('../secret'), /not a Meld session/);
+  assert.equal(t.calls.length, count);
+  for (const patch of [{ chainCode: 'ETH' }, { contract: 'wrong-asset' }]) {
+    t.currencyPatch = patch;
+    await assert.rejects(createRamp({ ...MELD_TEST_OPTIONS, fetch: t.fetch }).session({ ...request, asset: 'USDC' }), /does not uniquely identify/);
+  }
+  const failed = createRamp({ ...MELD_TEST_OPTIONS, fetch: async () => Response.json({ code: 'INVALID_AMOUNT_TOO_LOW', requestId: 'safe-ref', message: 'private provider information' }, { status: 400 }) });
+  await assert.rejects(failed.session(request), (e: Error) => /INVALID_AMOUNT_TOO_LOW/.test(e.message) && /safe-ref/.test(e.message) && !/private provider/.test(e.message));
+});
+
+test('the gateway opens Meld only for signed member requests and never returns another owner’s order', async () => {
   const relay = await startDevRelay(7796);
   try {
     const member = actor();
     const stranger = actor();
     relay.events.push(member.binding);
-    const t = fakeTransak(member.pubkey, walletKeys(generateSecretKey()).address);
-    const gw = createGateway({ relays: [relay.url], base: '/fg', appUrl: 'https://app.test/', fetch: t.fetch, ramp: { apiKey: 'key', apiSecret: 'secret', environment: 'staging', referrerDomain: 'app.test' } });
-    const post = (who: typeof member, path: string, body: object) => {
-      const url = `https://gw.test/fg${path}`;
+    const t = fakeMeld(walletKeys(generateSecretKey()).address);
+    const gw = createGateway({ relays: [relay.url], base: '/fg', appUrl: 'https://app.test/', fetch: t.fetch, ramp: MELD_TEST_OPTIONS });
+    const post = (who: typeof member, body: object, withIp = true) => {
+      const url = 'https://gw.test/fg/ramp/session';
       const text = JSON.stringify(body);
-      return gw(new Request(url, { method: 'POST', body: text, headers: { Authorization: authHeader(who.nostrKey, url, 'POST', text), 'Content-Type': 'application/json' } }), { ip: '5.6.7.8' });
+      return gw(new Request(url, { method: 'POST', body: text, headers: { Authorization: authHeader(who.nostrKey, url, 'POST', text), 'Content-Type': 'application/json' } }), withIp ? { ip: '5.6.7.8' } : {});
     };
-    assert.deepEqual(await (await gw(new Request('https://gw.test/fg/wallet/config'))).json(), { ramp: true });
+    assert.deepEqual(await (await gw(new Request('https://gw.test/fg/wallet/config'))).json(), { ramp: true, provider: 'meld', environment: 'production' });
     const address = walletKeys(member.nostrKey).address;
-    const session = await post(member, '/ramp/session', { side: 'BUY', walletAddress: address, amount: 20, asset: 'ALGO', redirectURL: 'https://app.test/' });
-    assert.equal((await session.json()).url, 'https://global-stg.transak.com/?sessionId=s1');
-    const sent = t.calls.find((c) => c.url.endsWith('/auth/session'))!;
-    assert.equal(sent.headers.get('x-user-ip'), '5.6.7.8');
-    assert.equal((sent.body!.widgetParams as Record<string, unknown>).partnerCustomerId, member.pubkey);
-    assert.equal((sent.body!.widgetParams as Record<string, unknown>).cryptoCurrencyCode, 'ALGO');
+    const request = { side: 'BUY', walletAddress: address, amount: 20, asset: 'ALGO', countryCode: 'US', subdivision: 'US-CA', redirectURL: 'https://app.test/' };
+    const session = await post(member, request);
+    assert.equal(session.status, 200);
+    assert.equal((await session.json()).id, 'session-1');
+    const sent = t.calls.find((c) => c.url.endsWith('/crypto/session/widget'))!;
+    assert.equal((sent.body!.sessionData as Record<string, unknown>).clientIpAddress, '5.6.7.8');
+    assert.equal(sent.body!.externalCustomerId, member.pubkey);
     const preflight = await gw(new Request('https://gw.test/fg/ramp/session', { method: 'OPTIONS', headers: { Origin: 'https://app.test' } }));
     assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), 'https://app.test');
     const before = t.calls.length;
-    assert.equal((await gw(new Request('https://gw.test/fg/ramp/session', { method: 'OPTIONS', headers: { Origin: 'https://other.test' } }))).status, 403);
-    const badOrigin = await gw(new Request('https://gw.test/fg/ramp/session', { method: 'POST', headers: { Origin: 'https://other.test' }, body: '{}' }));
-    assert.equal(badOrigin.status, 403);
-    assert.equal(badOrigin.headers.get('Access-Control-Allow-Origin'), null);
-    assert.equal(t.calls.length, before, 'rejected origins never reach Transak');
-    assert.equal((await post(member, '/ramp/session', { side: 'BUY', walletAddress: address, redirectURL: 'https://other.test/' })).status, 400);
-    const noIpUrl = 'https://gw.test/fg/ramp/session';
-    const noIpBody = JSON.stringify({ side: 'BUY', walletAddress: address, redirectURL: 'https://app.test/' });
-    const noIp = await gw(new Request(noIpUrl, { method: 'POST', body: noIpBody, headers: { Authorization: authHeader(member.nostrKey, noIpUrl, 'POST', noIpBody) } }));
-    assert.equal(noIp.status, 503, 'never invent a visitor IP for Transak');
-    assert.equal((await post(stranger, '/ramp/session', { side: 'BUY', walletAddress: address, redirectURL: 'https://app.test/' })).status, 403, 'members only');
-    assert.equal((await gw(new Request('https://gw.test/fg/ramp/session', { method: 'POST', body: '{}' }))).status, 401);
-
-    const orderUrl = 'https://gw.test/fg/ramp/order/order-123';
-    const body = await (await gw(new Request(orderUrl, { headers: { Authorization: authHeader(member.nostrKey, orderUrl, 'GET') } }))).json();
-    assert.equal(body.problem, null);
-    assert.equal(body.order.cryptoAmount, 10);
-    assert.equal((await gw(new Request('https://gw.test/fg/wallet/start', { method: 'POST', body: '{}' }))).status, 404, 'the gateway funds no one’s wallet');
-
+    const bad = await gw(new Request('https://gw.test/fg/ramp/session', { method: 'POST', headers: { Origin: 'https://other.test' }, body: '{}' }));
+    assert.equal(bad.status, 403);
+    assert.equal(t.calls.length, before);
+    assert.equal((await post(member, { ...request, redirectURL: 'https://other.test/' })).status, 400);
+    assert.equal((await post(member, { ...request, amount: -1 })).status, 400);
+    assert.equal((await post(member, { ...request, countryCode: '' })).status, 400);
+    assert.equal((await post(member, request, false)).status, 503);
+    assert.equal((await post(stranger, request)).status, 403);
+    const sell = await post(member, { ...request, side: 'SELL', asset: 'USDC' });
+    const id = (await sell.json()).id;
+    const orderUrl = `https://gw.test/fg/ramp/order/${id}`;
+    const read = () => gw(new Request(orderUrl, { headers: { Authorization: authHeader(member.nostrKey, orderUrl, 'GET') } }));
+    assert.equal((await (await read()).json()).problem, null);
+    t.transactionPatch = { externalCustomerId: stranger.pubkey };
+    assert.equal((await read()).status, 403);
+    t.transactionPatch = { externalCustomerId: undefined };
+    assert.equal((await read()).status, 403, 'missing owner fails closed');
+    t.transactionPatch = { serviceProvider: 'OTHER' };
+    assert.equal((await read()).status, 409);
     const off = createGateway({ relays: [relay.url], base: '/fg', appUrl: 'https://app.test/', fetch: t.fetch });
     assert.deepEqual(await (await off(new Request('https://gw.test/fg/wallet/config'))).json(), { ramp: false });
-  } finally {
-    await relay.close();
-  }
+  } finally { await relay.close(); }
 });

@@ -18,7 +18,7 @@ test('only the authenticated edge can forward payment requests and a verified cl
     assert.equal(req.headers.get('x-fairground-proxy-secret'), null);
     assert.equal(req.headers.get('host'), null);
     assert.ok(!('error' in verifyAuthHeader(req.headers.get('authorization'), req.url, req.method, await req.text())));
-    return Response.json({ url: 'https://global-stg.transak.com/?sessionId=test' });
+    return Response.json({ url: 'https://meldcrypto.com/?token=test' });
   } });
   const request = (extra: Record<string, string> = {}, path = '/fairground/ramp/session') => new Request('https://payments.evolvetech.dev' + path, {
     method: 'POST', body,

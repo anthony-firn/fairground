@@ -2,14 +2,15 @@
 import { authHeader } from '@core/httpauth.ts';
 import { algorandUsdc, USDC_ASSET_ID } from '@core/rails/algorand.ts';
 import type { PaymentRequest, Transfer } from '@core/rails/rail.ts';
-import type { RampOrder } from '@core/ramp.ts';
+import { sellOrderProblem, type RampOrder, type RampSession } from '@core/ramp.ts';
 import { prepareSwap, quoteSwap, signSwap, swapProblem } from '@core/swap.ts';
 import {
   confirmed, convertibleAlgo, needsFeeTopUp, sign, submit, suggestedParams, usdcOptIn, usdcPayment, walletKeys, walletState,
 } from '@core/wallet.ts';
 import type { Account } from './account.ts';
-import { gatewayUrl, walletChanged } from './wallet.ts';
-import { requireRealPayments } from './pilot.ts';
+import { gatewayUrl, walletChanged, pendingRamp, rememberRamp, forgetRamp } from './wallet.ts';
+import { LOCAL_PILOT, requireRealPayments } from './pilot.ts';
+import { parseUsd } from '@core/pricing.ts';
 
 async function call<T>(account: Account, path: string, method: 'GET' | 'POST', body?: unknown): Promise<T> {
   const url = `${gatewayUrl()}${path}`;
@@ -74,13 +75,39 @@ export async function payFromWallet(account: Account, request: PaymentRequest): 
   return { id: txid, sender: keys.address, receiver: request.to, amount: request.amount, note: request.memo, time: Math.floor(Date.now() / 1000) };
 }
 
-/**
- * Opens Transak to buy into this wallet (ALGO for a wallet's first deposit, which it needs before it can hold dollars;
- * USDC after that), or to sell from it to a bank account. Returns the single-use link.
- */
-export async function rampSession(account: Account, side: 'BUY' | 'SELL', walletAddress: string, amount?: number, asset: 'USDC' | 'ALGO' = 'USDC'): Promise<string> {
+/** Create a Meld checkout on the gateway and save its correlation before navigating away. */
+export async function rampSession(account: Account, side: 'BUY' | 'SELL', walletAddress: string, amount: number, asset: 'USDC' | 'ALGO', subdivision: string): Promise<string> {
   const back = `${location.origin}${location.pathname}?ramp=${side.toLowerCase()}`;
-  return (await call<{ url: string }>(account, '/ramp/session', 'POST', { side, walletAddress, amount, asset, redirectURL: back })).url;
+  const session = await call<RampSession>(account, '/ramp/session', 'POST', { side, walletAddress, amount, asset, countryCode: 'US', subdivision, redirectURL: back });
+  if (session.environment === 'sandbox' && !LOCAL_PILOT) throw new Error('Sandbox checkout cannot be used with this mainnet wallet.');
+  rememberRamp(account, { id: session.id, externalSessionId: session.externalSessionId, side, walletAddress, amount, environment: session.environment });
+  return session.url;
 }
 
 export const rampOrder = (account: Account, id: string) => call<{ order: RampOrder; problem: string | null }>(account, `/ramp/order/${encodeURIComponent(id)}`, 'GET');
+
+/** Bind a provider deposit instruction to the checkout this wallet actually opened. */
+export function cashOutProblem(account: Account, order: RampOrder): string | undefined {
+  const pending = pendingRamp(account, order.sessionId);
+  if (!pending || pending.side !== 'SELL' || pending.id !== order.sessionId || pending.externalSessionId !== order.externalSessionId) return 'this wallet has no matching cash-out session';
+  const problem = sellOrderProblem(order, account.pubkey);
+  if (problem) return problem;
+  const address = walletKeys(account.nostrKey).address;
+  if (pending.walletAddress !== address || order.sourceWalletAddress !== address) return 'the cash-out source is a different wallet';
+  if (parseUsd(order.cryptoAmount) !== parseUsd(String(pending.amount))) return 'the cash-out amount changed; open a new checkout';
+  if (order.environment !== pending.environment || (order.environment === 'sandbox' && !LOCAL_PILOT)) return 'checkout and wallet environments do not match';
+}
+
+/** Recheck the provider just before signing, and find an earlier confirmed transfer before retrying. */
+export async function payCashOut(account: Account, sessionId: string): Promise<void> {
+  requireRealPayments();
+  const { order, problem } = await rampOrder(account, sessionId);
+  const invalid = problem ?? cashOutProblem(account, order);
+  if (invalid) throw new Error(invalid);
+  const memo = `fairground:cashout:${order.id}`;
+  const existing = await algorandUsdc.listTransfers({ address: order.sourceWalletAddress, role: 'sender', notePrefix: memo, from: 0, to: Math.floor(Date.now() / 1000) + 600 });
+  if (!existing.some((t) => t.note === memo && t.receiver === order.walletAddress && t.amount === parseUsd(order.cryptoAmount))) {
+    await payFromWallet(account, { to: order.walletAddress, amount: parseUsd(order.cryptoAmount), memo });
+  }
+  forgetRamp(account, sessionId);
+}

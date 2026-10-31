@@ -54,15 +54,14 @@ overdue, days to pay) are public, so creators can see who pays before accepting.
 **A wallet built in, and dollars in and out of a bank.** Every account has a wallet: an Algorand account whose key is
 derived from the account's own key, so the backup code and the username-and-password vault restore it, and payments
 are signed on the device in one tap. Nobody else, Fairground included, can move the money, and Fairground funds no
-one's wallet. Money comes in and goes out through Transak, a licensed on- and off-ramp (card or bank transfer to buy,
-bank payout to sell), opened from the wallet. Algorand accounts need a little ALGO before they can hold USDC, so a
-wallet's first deposit buys ALGO: when it arrives the wallet opts in to USDC, keeps 0.5 ALGO (about five cents) for its
-account minimum and network fees, and converts the rest to dollars through Folks Router, an aggregator of Algorand's
-exchanges, checking every transaction the router asks it to sign. Later deposits buy USDC directly, and if fees run
-low the wallet turns a few cents of its own USDC back into ALGO. The gateway creates Transak sessions with the partner
-secret, and checks a sale with Transak before the wallet pays into it. Where Transak isn't available, exchanges such as
-Kraken send to and receive from the wallet directly. People who prefer their own wallet, including a quantum-safe
-Falcon account in Pera, can still pay through an ARC-26 link or QR code and be paid there.
+one's wallet. Card purchases and bank withdrawals use a server-created Meld checkout with explicitly configured
+suppliers and native Algorand currency IDs. The first deposit buys ALGO for setup, USDC opt-in and a reserve;
+the remainder converts to USDC through Folks Router after checking every transaction the router asks it to sign.
+Later deposits buy USDC directly. Cash-out instructions are fetched from Meld using the saved checkout session and
+checked against the wallet, owner and exact amount again before signing. Providers handle KYC and payment details.
+Live routes still require Meld credentials and supplier eligibility; see [Meld integration](docs/meld-integration.md).
+External wallets and exchange transfers remain available independently of card/bank checkout. Wallet, Add money and
+payment screens include copyable addresses, QR codes and exchange instructions; see [Use crypto you already own](docs/crypto-transfers.md).
 
 **Payment goes straight to the recipient's wallet,** in USDC on Algorand, from the built-in wallet or through an ARC-26
 link that opens the payer's own wallet. The project never holds or splits funds. Each transfer's memo names what it's for (a deal, fan support, a
@@ -183,9 +182,9 @@ the account's vault on relays: keys, settings, AI interests, subscriptions, payo
 - **A wallet's first deposit pays for its own setup.** About five cents of it stays as ALGO for Algorand's account
   minimum and fees, and converting the rest costs the router's 0.1% plus the exchange's fee and a little price
   movement (at most 0.5% below the quote, or the conversion fails). The provider's minimum purchase applies.
-- **In-app buying and selling need a Transak partner account** (a business sign-up with their verification) and its
-  API key and secret in the gateway. Until then the wallet explains how to use an exchange. Transak's fees, limits and
-  countries apply, and they check identity the first time.
+- **In-app buying and selling use Meld.** Supplier approval and credentials are still external prerequisites.
+  The initial interface requests US/USD routes and collects the customer's state; a quote checks availability and
+  the provider shows final fees and handles identity checks. A configured route is not proof of production approval.
 - **The iOS app** will need publishing from an Apple developer account enrolled as an organization, which Apple
   requires of apps with wallets.
 - **The public gateway has costs.** Feeds are small and cached, and plain downloads redirect to the creator's file, but
@@ -223,7 +222,7 @@ Node.js 22.18 or later. The protocol core runs as TypeScript with no build step;
 
 ```sh
 npm install
-npm test                  # protocol core: 102 unit tests
+npm test                  # protocol core: 135 unit tests
 npm run typecheck
 npm run app:dev           # the app on http://localhost:5173
 npm run app:build         # static build in app/dist
@@ -276,11 +275,11 @@ Store releases need signing keys and developer accounts, which aren't part of th
 | `src/podcast.ts` | Shows, episodes, Apple categories and RSS feeds |
 | `src/ads.ts` | Campaigns, host-read placements, approvals and dynamic ad breaks |
 | `src/mp3.ts` | MP3 frame layout, for splicing reads in without re-encoding |
-| `src/gateway.ts` | The gateway: podcast feeds, stitched downloads with Range support, Transak sessions, health |
+| `src/gateway.ts` | The gateway: podcast feeds, stitched downloads with Range support, Meld checkout sessions, health |
 | `src/walletkey.ts`, `src/wallet.ts` | The built-in wallet: key derivation, balances, USDC payments signed on the device |
 | `src/algotx.ts` | The two Algorand transactions Fairground makes, encoded byte-for-byte as the network expects (checked against the Algorand SDK in tests) |
 | `src/swap.ts` | Converting ALGO and USDC through Folks Router, with every transaction checked before signing |
-| `src/ramp.ts` | Transak sessions and cash-out order checks |
+| `src/ramp.ts` | Meld checkout sessions and cash-out order checks |
 | `src/httpauth.ts` | Signed HTTP requests (NIP-98) to the gateway |
 | `src/geohash.ts` | Approximate locations for "near me" |
 | `src/feed.ts` | Feed recipes, local ranking with explanations, cold start, local AI embedders |

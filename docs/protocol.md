@@ -480,12 +480,17 @@ Wallet and ramp calls carry a NIP-98 `Authorization: Nostr <base64 event>` heade
 `method`, and `payload` (SHA-256 of the body) when there is one, created within 60 seconds. Only members (accounts
 with a key binding) are served.
 
-- `GET /wallet/config` → `{ ramp: boolean }`
-- `POST /ramp/session` `{ side: "BUY" | "SELL", walletAddress, amount?, asset?: "USDC" | "ALGO", redirectURL }` → `{ url }`, a single-use
-  Transak widget link; the member's pubkey is the order's `partnerCustomerId`.
-- `GET /ramp/order/<id>` → `{ order, problem }`. A wallet pays into a sale only when `problem` is null: the order is
-  the member's own, a sale of USDC on Algorand, and waiting for the USDC. The payment's memo is
-  `fairground:cashout:<order id>`.
+- `GET /wallet/config` → `{ ramp: boolean, provider?: "meld", environment?: "sandbox" | "production" }`.
+- `POST /ramp/session` `{ side: "BUY" | "SELL", walletAddress, amount, asset?: "USDC" | "ALGO", countryCode, subdivision?, redirectURL }`
+  → `{ url, id, externalSessionId, environment }`. The gateway first requests an eligible quote from its configured
+  supplier for the exact Algorand asset, then creates a versioned Meld widget session. The signed member's pubkey
+  is `externalCustomerId`. Credentials stay on the gateway. Wallet/currency/amount/payment method locks are requested.
+- `GET /ramp/order/<sessionId>` → `{ order, problem }`. A strict owner check precedes any response. A cash-out must
+  use the configured supplier, native USDC on Algorand, USD, pending status and the provider's destination wallet.
+  The client binds the response to its saved session and exact source wallet/amount, then rechecks before signing.
+
+Meld returns to `redirectURL` without adding an order ID. The saved session identifies the transaction;
+callback parameters and provider UI messages are never authority to transfer funds. See [Meld integration](meld-integration.md).
 
 ## Listings (NIP-99, kind 30402)
 

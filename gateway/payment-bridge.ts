@@ -1,4 +1,4 @@
-/** Private bridge from the public edge gateway to the fixed-IP payment service. */
+/** Private bridge from the public edge gateway to the private payment service. */
 import { timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import type { RequestInfo } from '../src/gateway.ts';
@@ -29,7 +29,7 @@ export function createPaymentBridge(opts: PaymentBridgeOptions) {
     if (!url.pathname.startsWith(base + '/') || url.search || !(
       (path === '/wallet/config' && ['GET', 'OPTIONS'].includes(req.method)) ||
       (path === '/ramp/session' && ['POST', 'OPTIONS'].includes(req.method)) ||
-      (/^\/ramp\/order\/[A-Za-z0-9-]{6,80}$/.test(path) && ['GET', 'OPTIONS'].includes(req.method))
+      (/^\/ramp\/order\/[A-Za-z0-9_-]{6,128}$/.test(path) && ['GET', 'OPTIONS'].includes(req.method))
     )) return error(404);
     const ip = req.headers.get('x-fairground-client-ip') ?? '';
     if (!isIP(ip) || ip === '0.0.0.0' || ip === '::') return error(400);

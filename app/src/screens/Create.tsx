@@ -27,12 +27,15 @@ import { showPath, useMyShows } from './Podcast.tsx';
 function BuiltInPayout({ onSaved }: { onSaved: (address: string) => void }) {
   const { account } = useApp();
   const wallet = useWallet(account);
-  if (!wallet.state) return <div className="skeleton" />;
-  if (!wallet.state.active) return <><FirstDeposit compact /><SettleStatus /></>;
   return (
-    <button type="button" className="btn primary block" onClick={() => (getPaidHere(account), onSaved(wallet.address))}>
-      Use my Fairground wallet ({usd(wallet.state.usdc)})
-    </button>
+    <>
+      <FirstDeposit compact active={wallet.state?.active} />
+      <SettleStatus />
+      {!wallet.state && <div className="skeleton" />}
+      {wallet.state?.active && <button type="button" className="btn primary block" onClick={() => (getPaidHere(account), onSaved(wallet.address))}>
+        Use my Fairground wallet ({usd(wallet.state.usdc)})
+      </button>}
+    </>
   );
 }
 

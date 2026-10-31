@@ -1,9 +1,9 @@
-/** Small Node service behind Caddy on a server with a reserved public IPv4. */
+/** Small Node payment service behind the authenticated edge bridge. */
 import { createServer } from 'node:http';
 import { createGateway } from '../src/gateway.ts';
 import { DEFAULT_RELAYS } from '../src/defaults.ts';
 import { createPaymentBridge } from './payment-bridge.ts';
-import { transakFetch } from './transak-fetch.ts';
+import { meldOptions } from './meld-config.ts';
 
 const required = (key: string) => {
   const value = process.env[key];
@@ -13,20 +13,13 @@ const required = (key: string) => {
 const appUrl = process.env.FAIRGROUND_APP_URL ?? 'https://www.evolvetech.dev/play/fairground/';
 const base = '/fairground';
 const enabled = process.env.PAYMENTS_ENABLED === 'true';
-const environment = process.env.TRANSAK_ENVIRONMENT ?? 'staging';
-if (!['staging', 'production'].includes(environment)) throw new Error('invalid Transak environment');
-// This app's wallet uses mainnet. Sandbox sessions belong in separate integration tests.
-if (enabled && environment !== 'production') throw new Error('do not enable sandbox payments for mainnet wallets');
+// Public wallets use mainnet. Sandbox credentials are used only by the local preview.
 const bridge = createPaymentBridge({
   secret: required('PAYMENTS_PROXY_SECRET'), publicOrigin: new URL(appUrl).origin, base,
   handle: createGateway({
     relays: DEFAULT_RELAYS, base, appUrl,
     walletOrigins: [new URL(appUrl).origin, 'capacitor://localhost', 'http://localhost'],
-    ramp: enabled ? {
-      apiKey: required('TRANSAK_API_KEY'), apiSecret: required('TRANSAK_API_SECRET'), environment: 'production',
-      referrerDomain: new URL(appUrl).hostname,
-      fetch: transakFetch,
-    } : undefined,
+    ramp: enabled ? meldOptions(process.env, 'production') : undefined,
   }),
 });
 

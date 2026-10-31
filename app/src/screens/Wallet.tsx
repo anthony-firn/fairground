@@ -1,21 +1,21 @@
 /**
- * The wallet: a balance in dollars, money in and out of a bank through Transak, sending and receiving, and what came
+ * The wallet: a balance in dollars, money in and out of a bank through Meld, sending and receiving, and what came
  * and went. The money is USDC (digital dollars) on Algorand in an account only this device can sign for; Fairground
  * never holds it or funds it. A wallet is set up by its owner's first deposit. Until in-app buying and selling is
  * switched on, exchanges can send to and receive from it directly.
  */
 import { useEffect, useState } from 'react';
-import QRCode from 'qrcode';
 import { DEVELOPMENT_ADDRESS } from '@core/defaults.ts';
 import { algorandUsdc, isAlgorandAddress } from '@core/rails/algorand.ts';
 import type { Transfer } from '@core/rails/rail.ts';
 import { formatUsd, parseUsd } from '@core/pricing.ts';
-import { feesLeft, SETUP_MICROALGOS } from '@core/walletkey.ts';
+import { feesLeft } from '@core/walletkey.ts';
+import { CryptoFundingSheet } from '../components/CryptoFunding.tsx';
 import { Field, Sheet, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
 import { payoutAddress } from '../lib/data.ts';
 import { balance, nowSeconds, timeAgo, usd } from '../lib/format.ts';
-import { getPaidHere, useSettle, useWallet, walletChanged, walletConfig } from '../lib/wallet.ts';
+import { getPaidHere, useSettle, useWallet, walletChanged, walletConfig, pendingRamp, pendingRamps } from '../lib/wallet.ts';
 import { LOCAL_PILOT } from '../lib/pilot.ts';
 
 const actions = () => import('../lib/walletActions.ts');
@@ -35,18 +35,19 @@ function label(t: Transfer, mine: string): string {
  * hold dollars, so the first deposit arrives as ALGO: the wallet keeps about five cents' worth for its account minimum
  * and network fees, and converts the rest to dollars.
  */
-export function FirstDeposit({ compact }: { compact?: boolean }) {
+export function FirstDeposit({ compact, active }: { compact?: boolean; active?: boolean }) {
   const [adding, setAdding] = useState(false);
   const [receiving, setReceiving] = useState(false);
+  if (receiving) return <CryptoFundingSheet onClose={() => setReceiving(false)} />;
+  if (adding) return <RampSheet side="BUY" onClose={() => setAdding(false)} />;
+  if (active !== false) return null;
   return (
     <div className="card stack">
       <strong>Set up your wallet with a first deposit</strong>
-      <span className="small">Choose an amount and pay by card through Transak. Your wallet is set up automatically, keeping a small reserve for network fees.</span>
-      {!compact && <span className="tiny muted">Your deposit covers this wallet’s setup. Transak shows its charges before you pay.</span>}
-      <button type="button" className="btn primary" onClick={() => setAdding(true)}>Add money</button>
-      <button type="button" className="btn ghost" onClick={() => setReceiving(true)}>Transfer ALGO from another wallet</button>
-      {adding && <RampSheet side="BUY" onClose={() => setAdding(false)} />}
-      {receiving && <ReceiveSheet setup onClose={() => setReceiving(false)} />}
+      <span className="small">Already have crypto? Transfer ALGO from Coinbase, Kraken or another wallet. Fairground sets up your wallet when it arrives.</span>
+      {!compact && <span className="tiny muted">Your first ALGO deposit covers setup and network fees; larger deposits are converted to USDC.</span>}
+      <button type="button" className="btn primary" onClick={() => setReceiving(true)}>Transfer crypto I already own</button>
+      <button type="button" className="btn ghost" onClick={() => setAdding(true)}>Add money</button>
     </div>
   );
 }
@@ -61,34 +62,40 @@ export function SettleStatus() {
   return null;
 }
 
-/** Buying or selling through Transak, or, where that isn't available, how to do it with an exchange. */
+/** Buying or selling through Meld, or, where that isn't available, how to do it with an exchange. */
 export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; initial?: string; onClose: () => void }) {
   const { account, toast } = useApp();
   const { address, state, config } = useWallet(account);
   const [amount, setAmount] = useState(initial ?? (side === 'BUY' ? '25' : state ? formatUsd(state.usdc) : ''));
   const [opened, setOpened] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [receiving, setReceiving] = useState(false);
+  const [subdivision, setSubdivision] = useState('');
+  const [starting, setStarting] = useState(false);
   const buy = side === 'BUY';
   // Until the wallet is set up, deposits arrive as ALGO, which it needs before it can hold dollars.
   const asset = buy && !state?.active ? 'ALGO' : 'USDC';
   async function open() {
+    setStarting(true);
     // Open the window first, in the click, so browsers don't block it; then point it at the session.
     const win = window.open('about:blank', '_blank');
     try {
-      const url = await (await actions()).rampSession(account, side, address, Number(amount) || undefined, asset);
+      const url = await (await actions()).rampSession(account, side, address, Number(amount), asset, `US-${subdivision}`);
       if (win) win.location.href = url;
       else location.href = url;
       setOpened(true);
     } catch (e) {
       win?.close();
       toast((e as Error).message);
-    }
+    } finally { setStarting(false); }
   }
+  if (receiving) return <CryptoFundingSheet onClose={() => setReceiving(false)} />;
   if (buy && !config?.ramp) {
     return (
       <Sheet title="Add money" onClose={onClose}>
-        <p className="small">{config ? 'Card payments are temporarily unavailable. Please try again shortly.' : 'Checking card checkout…'}</p>
-        <button type="button" className="btn primary block" disabled={!config || checking} onClick={async () => {
+        <p className="small">{config ? 'Card payments are not available yet. You can transfer crypto from an exchange or wallet right now.' : 'Checking card checkout… You can also transfer crypto you already own.'}</p>
+        <button type="button" className="btn primary block" onClick={() => setReceiving(true)}>Transfer crypto I already own</button>
+        <button type="button" className="btn ghost block" disabled={!config || checking} onClick={async () => {
           setChecking(true);
           try { await walletConfig(true); walletChanged(); }
           finally { setChecking(false); }
@@ -110,17 +117,22 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
   }
   return (
     <Sheet title={buy ? 'Add money' : 'Cash out'} onClose={onClose}>
+      {buy && !opened && <div className="card stack"><strong>Already have crypto?</strong><span className="small">Transfer from an exchange or Algorand wallet.</span><button type="button" className="btn block" onClick={() => setReceiving(true)}>Transfer crypto I already own</button></div>}
       {opened ? (
-        <p className="small">{LOCAL_PILOT ? 'The Transak sandbox is open. Use its test details only; the demo balance here does not represent a real deposit or payout.' : buy ? `Finish in the Transak window. Your deposit appears after Transak completes the purchase and delivers it.${asset === 'ALGO' ? ' Keep this page open, or come back: the wallet sets itself up and converts it to dollars.' : ''}`
-          : 'Finish in the Transak window. When it asks you to send the USDC, you’ll come back here to confirm.'}</p>
+        <>
+        <p className="small">{LOCAL_PILOT ? 'The Meld sandbox is open. Use its test details only; this preview does not move real funds.' : buy ? `Finish in the Meld window. Your deposit appears after Meld completes the purchase and delivers it.${asset === 'ALGO' ? ' Keep this page open, or come back: the wallet sets itself up and converts it to dollars.' : ''}`
+          : 'Finish in the Meld window. When it asks you to send the USDC, you’ll come back here to confirm.'}</p>
+        {!buy && <button type="button" className="btn primary block" onClick={() => { location.hash = '/wallet'; location.reload(); }}>Check cash-out</button>}
+        </>
       ) : (
         <>
           <Field label={buy ? 'Amount ($)' : 'Amount to cash out ($)'}><input type="text" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></Field>
+          <Field label="US state" hint="Enter your two-letter state abbreviation, for example CA. Availability depends on your location."><input type="text" value={subdivision} maxLength={2} autoComplete="address-level1" onChange={(e) => setSubdivision(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} /></Field>
           {asset === 'ALGO' && <p className="small">This first deposit also sets up your wallet automatically. A small reserve stays for setup and future network fees.</p>}
-          <p className="small muted">{buy ? 'Pay by card through Transak, a licensed payments company; they verify your identity the first time. Fairground never sees your card details and takes no fee.'
-            : 'Transak pays your bank account; they verify your identity the first time. Fairground never sees your bank details and takes no fee.'}</p>
+          <p className="small muted">{buy ? 'Meld connects you to a payment provider for card payments and identity checks. The provider shows its fees before you pay. Fairground never sees your card details or takes a fee.'
+            : 'Meld connects you to a provider for your bank payout and identity checks. The provider shows its fees before you confirm. Fairground never sees your bank details or takes a fee.'}</p>
           {LOCAL_PILOT && <p className="small warn">Test checkout only. Use sandbox payment details; real transfers are disabled in this preview.</p>}
-          <button type="button" className="btn primary block" disabled={!(Number(amount) > 0)} onClick={open}>{LOCAL_PILOT ? 'Open Transak sandbox' : 'Continue with Transak'}</button>
+          <button type="button" className="btn primary block" disabled={starting || !state || !(Number(amount) > 0) || subdivision.length !== 2 || (!buy && Number(amount) > Number(state?.usdc ?? 0n) / 1_000_000)} onClick={open}>{starting ? 'Opening checkout…' : LOCAL_PILOT ? 'Open Meld sandbox' : 'Continue with Meld'}</button>
         </>
       )}
     </Sheet>
@@ -163,32 +175,19 @@ function SendSheet({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ReceiveSheet({ onClose, setup = false }: { onClose: () => void; setup?: boolean }) {
-  const { account, toast } = useApp();
-  const { address } = useWallet(account);
-  const [qr, setQr] = useState('');
-  useEffect(() => {
-    QRCode.toDataURL(address, { margin: 1, width: 360 }).then(setQr, () => undefined);
-  }, [address]);
-  return (
-    <Sheet title="Receive" onClose={onClose}>
-      <p className="small">{LOCAL_PILOT ? 'Preview address only. Do not send real funds to this test account.' : setup ? 'For your first deposit, send ALGO on the Algorand network to this address. Keep your wallet open: it automatically enables USDC and converts the deposit, keeping a small ALGO reserve.' : 'Your wallet’s address on Algorand. Send only USDC or ALGO to it.'}</p>
-      {qr && <img className="qr" src={qr} alt="QR code of your wallet address" />}
-      <code className="tiny" style={{ wordBreak: 'break-all' }}>{address}</code>
-      <button type="button" className="btn" onClick={() => navigator.clipboard.writeText(address).then(() => toast('Address copied'), () => undefined)}>Copy address</button>
-    </Sheet>
-  );
+function ReceiveSheet({ onClose }: { onClose: () => void }) {
+  return <CryptoFundingSheet onClose={onClose} />;
 }
 
-/** Coming back from Transak to send the USDC for a sale. The order is checked with Transak before anything moves. */
+/** Coming back from Meld to send the USDC for a sale. The order is checked with Meld before anything moves. */
 function CashOutReturn({ orderId, onClose }: { orderId: string; onClose: () => void }) {
   const { account, toast } = useApp();
   const [check, setCheck] = useState<{ amount: bigint; to: string; fiat: string } | { problem: string }>();
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    actions().then((a) => a.rampOrder(account, orderId)).then(({ order, problem }) => {
+    actions().then((a) => a.rampOrder(account, orderId).then((result) => ({ ...result, problem: result.problem ?? a.cashOutProblem(account, result.order) }))).then(({ order, problem }) => {
       if (problem) return setCheck({ problem });
-      setCheck({ amount: parseUsd(order.cryptoAmount.toFixed(6)), to: order.walletAddress, fiat: `${order.fiatAmount.toFixed(2)} ${order.fiatCurrency}` });
+      setCheck({ amount: parseUsd(order.cryptoAmount), to: order.walletAddress, fiat: `${order.fiatAmount.toFixed(2)} ${order.fiatCurrency}` });
     }, (e: Error) => setCheck({ problem: e.message }));
   }, [account, orderId]);
   return (
@@ -197,13 +196,13 @@ function CashOutReturn({ orderId, onClose }: { orderId: string; onClose: () => v
       {check && 'problem' in check && <p className="small bad">This can’t be paid: {check.problem}.</p>}
       {check && 'amount' in check && (
         <>
-          <p>Send <strong>{usd(check.amount)}</strong> to Transak, and they’ll pay about <strong>{check.fiat}</strong> to your bank.</p>
-          <p className="tiny muted">Checked with Transak: this order is yours and waiting for this payment.</p>
+          <p>Send <strong>{usd(check.amount)}</strong> to the provider, and they’ll pay about <strong>{check.fiat}</strong> to your bank.</p>
+          <p className="tiny muted">Checked with Meld: this order is yours and waiting for this payment.</p>
           <button type="button" className="btn primary block" disabled={busy} onClick={async () => {
             setBusy(true);
             try {
-              await (await actions()).payFromWallet(account, { to: check.to, amount: check.amount, memo: `fairground:cashout:${orderId}` });
-              toast('Sent. Transak will pay your bank.');
+              await (await actions()).payCashOut(account, orderId);
+              toast('Sent. The payment provider will process your bank payout.');
               onClose();
             } catch (e) {
               toast((e as Error).message);
@@ -217,11 +216,11 @@ function CashOutReturn({ orderId, onClose }: { orderId: string; onClose: () => v
   );
 }
 
-export function WalletScreen({ query }: { query: URLSearchParams }) {
+export function WalletScreen(_props: { query: URLSearchParams }) {
   const { account, navigate } = useApp();
   const { address, state, error } = useWallet(account);
   const [sheet, setSheet] = useState<'buy' | 'sell' | 'send' | 'receive'>();
-  const [returning, setReturning] = useState(query.get('orderId'));
+  const [returning, setReturning] = useState(() => { const pending = pendingRamp(account); return pending?.side === 'SELL' ? pending.id : null; });
   const [activity, setActivity] = useState<Transfer[]>();
   const [, rerender] = useState(0);
   const paidHere = payoutAddress() === address;
@@ -250,7 +249,7 @@ export function WalletScreen({ query }: { query: URLSearchParams }) {
           <p className="card small">This wallet receives Fairground’s development donations.{state && !state.active ? ' Your first deposit also enables it to receive donations.' : ''}</p>
         )}
         {error && <p className="small warn">{error}</p>}
-        {state && !state.active && state.algo < SETUP_MICROALGOS && <FirstDeposit />}
+        <FirstDeposit active={state?.active} />
         <SettleStatus />
         {state?.active && (
           <>
@@ -268,6 +267,7 @@ export function WalletScreen({ query }: { query: URLSearchParams }) {
             )}
             {paidHere && <p className="tiny muted center">Sponsorships, fan support and sales are paid into this wallet.</p>}
             {feesLeft(state) < 9 && <p className="small warn">The wallet is out of ALGO for network fees. Send it 1 ALGO from an exchange, and it carries on.</p>}
+            {!returning && pendingRamps(account).filter((s) => s.side === 'SELL').map((s) => <button key={s.id} type="button" className="btn block" onClick={() => setReturning(s.id)}>Resume cash-out · {usd(parseUsd(String(s.amount)))}</button>)}
             <h2>Activity</h2>
             {activity === undefined && <div className="skeleton" />}
             {activity?.length === 0 && <p className="small muted">Nothing yet.</p>}

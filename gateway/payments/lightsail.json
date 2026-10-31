@@ -34,7 +34,7 @@
     }
   },
   "Outputs": {
-    "StaticIPv4": { "Value": { "Fn::GetAtt": ["EgressIp", "IpAddress"] }, "Description": "Register this IP with Transak and publish the payments hostname's A record." },
+    "StaticIPv4": { "Value": { "Fn::GetAtt": ["EgressIp", "IpAddress"] }, "Description": "Optional reserved address for a separately hosted gateway. Confirm provider network requirements before provisioning." },
     "InstanceName": { "Value": { "Ref": "Payments" } }
   }
 }

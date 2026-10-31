@@ -38,7 +38,7 @@ export interface GatewayOptions {
   feedHeaders?: Record<string, string>;
   /** Accounts this gateway won't serve, e.g. after a takedown notice. */
   blocked?: string[];
-  /** Buying and selling USDC through Transak (ramp.ts). Off unless partner credentials are configured. */
+  /** Buying and selling through Meld (ramp.ts). Off unless approved routes and credentials are configured. */
   ramp?: RampOptions;
   /** Browser origins permitted to use wallet services; defaults to the app's origin. */
   walletOrigins?: string[];
@@ -277,42 +277,44 @@ export function createGateway(opts: GatewayOptions): (req: Request, info?: Reque
     return auth.pubkey;
   }
 
-  /** The built-in wallet's services: buying and selling through Transak. */
+  /** The built-in wallet's services: buying and selling through Meld. */
   async function money(req: Request, path: string, info: RequestInfo): Promise<Response | undefined> {
-    if (path === '/wallet/config' && req.method === 'GET') return reply({ ramp: !!ramp });
+    if (path === '/wallet/config' && req.method === 'GET') return reply({ ramp: !!ramp, ...(opts.ramp ? { provider: 'meld', environment: opts.ramp.environment } : {}) });
     if (path === '/ramp/session' && req.method === 'POST') {
       if (!ramp) return reply({ error: 'buying and selling aren’t set up on this gateway yet' }, 503);
       const body = await req.text();
       const who = await member(req, body);
       if (who instanceof Response) return who;
-      let p: { side?: string; walletAddress?: string; amount?: number; redirectURL?: string; asset?: string };
+      let p: { side?: string; walletAddress?: string; amount?: number; redirectURL?: string; asset?: string; countryCode?: string; subdivision?: string };
       try { p = JSON.parse(body || '{}'); } catch { return reply({ error: 'bad request' }, 400); }
       if (!p || typeof p !== 'object') return reply({ error: 'bad request' }, 400);
-      if ((p.side !== 'BUY' && p.side !== 'SELL') || !/^[A-Z2-7]{58}$/.test(p.walletAddress ?? '') || !/^(https:\/\/|http:\/\/localhost[:/])/.test(p.redirectURL ?? '')) return reply({ error: 'bad request' }, 400);
+      if ((p.asset !== undefined && p.asset !== 'ALGO' && p.asset !== 'USDC') || !/^[A-Z]{2}$/.test(p.countryCode ?? '') || (p.subdivision !== undefined && !/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(p.subdivision)) || (p.side !== 'BUY' && p.side !== 'SELL') || !/^[A-Z2-7]{58}$/.test(p.walletAddress ?? '') || !/^(https:\/\/|http:\/\/localhost[:/])/.test(p.redirectURL ?? '')) return reply({ error: 'bad request' }, 400);
       let redirect: URL;
       try { redirect = new URL(p.redirectURL!); } catch { return reply({ error: 'bad return URL' }, 400); }
       const app = new URL(opts.appUrl);
       if (redirect.origin !== app.origin || redirect.pathname !== app.pathname) return reply({ error: 'return to this app only' }, 400);
       if (!info.ip || info.ip === '0.0.0.0') return reply({ error: 'the gateway could not determine your IP address' }, 503);
-      const amount = Number(p.amount) > 0 ? Number(p.amount) : undefined;
+      if (typeof p.amount !== 'number' || !Number.isFinite(p.amount) || p.amount <= 0 || p.amount > 1_000_000) return reply({ error: 'enter a valid amount' }, 400);
+      const amount = p.amount;
       try {
-        const url = await ramp.session({
+        const session = await ramp.session({
           side: p.side, walletAddress: p.walletAddress!, customer: who, redirectURL: p.redirectURL!, userIp: info.ip, asset: p.asset === 'ALGO' ? 'ALGO' : 'USDC',
-          ...(p.side === 'BUY' ? { fiatAmount: amount } : { cryptoAmount: amount }),
+          amount, countryCode: p.countryCode!, subdivision: p.subdivision,
         });
-        return reply({ url });
+        return reply(session);
       } catch (e) {
         return reply({ error: (e as Error).message }, 502);
       }
     }
-    const order = /^\/ramp\/order\/([A-Za-z0-9-]{6,80})$/.exec(path);
+    const order = /^\/ramp\/order\/([A-Za-z0-9_-]{6,128})$/.exec(path);
     if (order && req.method === 'GET') {
       if (!ramp) return reply({ error: 'buying and selling aren’t set up on this gateway yet' }, 503);
       const who = await member(req);
       if (who instanceof Response) return who;
       try {
         const o = await ramp.order(order[1]);
-        if (o.customer && o.customer !== who) return reply({ error: 'that order belongs to someone else' }, 403);
+        if (o.customer !== who) return reply({ error: 'that order belongs to someone else' }, 403);
+        if (o.side === 'SELL' && o.provider !== ramp.sellProvider) return reply({ error: 'cash-out supplier changed' }, 409);
         return reply({ order: o, problem: o.side === 'SELL' ? sellOrderProblem(o, who) ?? null : null });
       } catch (e) {
         return reply({ error: (e as Error).message }, 502);

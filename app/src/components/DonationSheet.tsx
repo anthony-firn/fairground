@@ -29,6 +29,7 @@ import { pqKeys } from '../lib/data.ts';
 import { usd } from '../lib/format.ts';
 import { publish, query, recentCredits } from '../lib/net.ts';
 import { load, save } from '../lib/storage.ts';
+import { CryptoFundingSheet } from './CryptoFunding.tsx';
 import { PayDialog } from './PayDialog.tsx';
 import { Field, Name, Sheet } from './ui.tsx';
 
@@ -58,6 +59,7 @@ interface Recipient {
 
 export function DonationSheet({ amount, payment, onClose }: Props) {
   const { account, toast } = useApp();
+  const [funding, setFunding] = useState(false);
   const [total, setTotal] = useState(amount ? formatUsd(suggestedDonation(amount)) : '5.00');
   const [devPercent, setDevPercent] = useState(DEFAULT_DEVELOPMENT_PERCENT);
   const [dev, setDev] = useState<string | undefined>();
@@ -129,6 +131,7 @@ export function DonationSheet({ amount, payment, onClose }: Props) {
     onClose();
   }
 
+  if (funding) return <CryptoFundingSheet onClose={() => setFunding(false)} />;
   if (queue.length) {
     const current = queue[0];
     return (
@@ -136,7 +139,7 @@ export function DonationSheet({ amount, payment, onClose }: Props) {
         title={`Donate to ${current.label}`}
         description={queue.length > 1 ? `Payment ${done.length + 1} of ${done.length + queue.length}` : undefined}
         request={current}
-        onClose={onClose}
+        onClose={() => { if (done.length) void finished(done); else onClose(); }}
         onPaid={(t) => {
           const all = [...done, { txid: t.id, amount: t.amount, recipient: current.recipient }];
           setDone(all);
@@ -151,6 +154,8 @@ export function DonationSheet({ amount, payment, onClose }: Props) {
     <Sheet title={amount ? 'Give a little back?' : 'Support Fairground'} onClose={onClose}>
       <p className="muted">Optional. Fairground takes nothing from payments. A small donation keeps it running: development builds the app,
         and relays (often run by your own audience) carry everyone’s posts.</p>
+      <p className="small">You can pay directly from an Algorand wallet holding USDC, or transfer crypto from an exchange into Fairground first. Card checkout is optional.</p>
+      <button type="button" className="btn block" onClick={() => setFunding(true)}>How to use crypto I already own</button>
       {nobody ? (
         <p className="card small">Donations open as soon as Fairground’s development fund is ready to receive. Thank you for thinking of it.</p>
       ) : (

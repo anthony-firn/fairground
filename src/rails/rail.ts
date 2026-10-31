@@ -27,6 +27,14 @@ export interface PaymentRequest {
   memo: string;
 }
 
+/** A payment link or pasted transaction must settle this request, not merely reach the same chain. */
+export function transferProblem(request: PaymentRequest, transfer: Transfer, earliestTime = 0): string | undefined {
+  if (transfer.receiver !== request.to) return 'This transfer went to a different address.';
+  if (transfer.note !== request.memo) return 'The payment note does not match. If this is your payment, contact the recipient before sending again.';
+  if (transfer.amount < request.amount) return 'This transfer is smaller than the requested amount.';
+  if (transfer.time < earliestTime) return 'This transfer was sent before this payment was opened.';
+}
+
 export interface Rail {
   id: string;
   label: string;
