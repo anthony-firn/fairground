@@ -2,6 +2,10 @@
  * Meld's retail ramp API, version 2026-02-03. API credentials stay on the gateway; providers collect KYC and
  * card/bank details in their hosted checkout. Algorand wallet keys and signing stay on the user's device.
  * Contract: https://docs.meld.io/docs/stablecoins/white-label-api-integration/whitelabel-api-guide/index
+ *
+ * Card purchases always buy native ALGO, which any wallet can receive without setup; the wallet converts it to USDC
+ * itself (passthrough.ts, swap.ts). Only cash-outs sell USDC, and they are configured separately, so buying can open
+ * before a cash-out supplier is approved.
  */
 import { isAlgorandAddress } from './rails/algorand.ts';
 import { parseUsd } from './pricing.ts';
@@ -11,10 +15,11 @@ export interface RampOptions {
   environment: 'sandbox' | 'production';
   /** Named suppliers and canonical Algorand currency IDs confirmed with Meld. No automatic supplier fallback. */
   buyProvider: string;
-  sellProvider: string;
   algoCurrencyCode: string;
-  usdcCurrencyCode: string;
-  sellPaymentMethod: string;
+  /** Cash-outs: all three, or none to leave selling off. */
+  sellProvider?: string;
+  usdcCurrencyCode?: string;
+  sellPaymentMethod?: string;
   /** Optional account-specific Meld checkout origins, for a white-labelled checkout domain. */
   checkoutOrigins?: string[];
   fetch?: typeof fetch;
@@ -25,6 +30,8 @@ export interface RampSession {
   externalSessionId: string;
   url: string;
   environment: 'sandbox' | 'production';
+  /** What checkout charges (a purchase) or sells (a cash-out), in dollars or USDC. */
+  amount: number;
 }
 
 export interface RampOrder {
@@ -53,9 +60,12 @@ export interface RampRequest {
   amount: number;
   redirectURL: string;
   userIp: string;
-  asset: 'USDC' | 'ALGO';
+  /** Purchases are always ALGO and cash-outs USDC; older clients still send it. */
+  asset?: 'USDC' | 'ALGO';
   countryCode: string;
   subdivision?: string;
+  /** A purchase for paying without a balance: the least ALGO that must arrive. The card amount is solved to cover it. */
+  receive?: number;
 }
 
 const HOSTS = { sandbox: 'https://api-sb.meld.io', production: 'https://api.meld.io' };
@@ -66,8 +76,11 @@ const text = (v: unknown) => typeof v === 'string' ? v : '';
 
 export function createRamp(opts: RampOptions) {
   if (!HOSTS[opts.environment]) throw new Error('invalid Meld environment');
-  for (const value of [opts.buyProvider, opts.sellProvider, opts.algoCurrencyCode, opts.usdcCurrencyCode, opts.sellPaymentMethod]) {
-    if (!/^[A-Z0-9_:-]+$/.test(value)) throw new Error('configure the approved Meld suppliers, payment method and Algorand currency IDs');
+  const sell = [opts.sellProvider, opts.usdcCurrencyCode, opts.sellPaymentMethod];
+  const canSell = sell.every((v) => v !== undefined);
+  if (!canSell && sell.some((v) => v !== undefined)) throw new Error('configure all of the cash-out supplier, payment method and USDC currency ID, or none');
+  for (const value of [opts.buyProvider, opts.algoCurrencyCode, ...(canSell ? sell : [])]) {
+    if (!/^[A-Z0-9_:-]+$/.test(value!)) throw new Error('configure the approved Meld suppliers, payment method and Algorand currency IDs');
   }
   if (opts.algoCurrencyCode === opts.usdcCurrencyCode) throw new Error('ALGO and Algorand USDC need distinct Meld currency IDs');
   const fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -91,7 +104,7 @@ export function createRamp(opts: RampOptions) {
     return record(await response.json());
   }
 
-  async function checkAsset(p: RampRequest, currency: string, provider: string): Promise<void> {
+  async function checkAsset(p: RampRequest, asset: 'ALGO' | 'USDC', currency: string, provider: string): Promise<void> {
     const category = p.side === 'BUY' ? 'CRYPTO_ONRAMP' : 'CRYPTO_OFFRAMP';
     const query = new URLSearchParams({ category, country: p.countryCode, type: 'CRYPTO', partner: provider });
     const key = `${query}:${currency}`;
@@ -101,7 +114,7 @@ export function createRamp(opts: RampOptions) {
     // A ticker alone cannot distinguish native Algorand USDC from an identically named token on another chain.
     if (!matches.length || matches.some((c) =>
       !['ALGO', 'ALGORAND'].includes(text(c.chainCode).toUpperCase()) ||
-      (p.asset === 'USDC' ? String(c.contract) !== '31566704' : !!c.contract),
+      (asset === 'USDC' ? String(c.contract) !== '31566704' : !!c.contract),
     )) throw new Error('Meld currency metadata does not uniquely identify the requested native Algorand asset');
     assetChecks.set(key, Date.now() + 300_000);
   }
@@ -111,29 +124,49 @@ export function createRamp(opts: RampOptions) {
       if (!isAlgorandAddress(p.walletAddress) || !Number.isFinite(p.amount) || p.amount <= 0 || p.amount > 1_000_000 || !/^[A-Z]{2}$/.test(p.countryCode)) throw new Error('invalid checkout request');
       try { if (parseUsd(String(p.amount)) <= 0n) throw new Error(); } catch { throw new Error('invalid checkout amount'); }
       const buy = p.side === 'BUY';
-      if (!buy && p.asset !== 'USDC') throw new Error('cash out USDC on Algorand only');
-      const currency = p.asset === 'ALGO' ? opts.algoCurrencyCode : opts.usdcCurrencyCode;
-      const provider = buy ? opts.buyProvider : opts.sellProvider;
-      await checkAsset(p, currency, provider);
-      const paymentMethodType = buy ? 'CREDIT_DEBIT_CARD' : opts.sellPaymentMethod;
+      if (!buy && !canSell) throw new Error('cashing out isn’t set up yet');
+      if (!buy && p.asset !== undefined && p.asset !== 'USDC') throw new Error('cash out USDC on Algorand only');
+      if (p.receive !== undefined && (!buy || !Number.isFinite(p.receive) || p.receive <= 0 || p.receive > 1e9)) throw new Error('invalid checkout request');
+      const currency = buy ? opts.algoCurrencyCode : opts.usdcCurrencyCode!;
+      const provider = buy ? opts.buyProvider : opts.sellProvider!;
+      await checkAsset(p, buy ? 'ALGO' : 'USDC', currency, provider);
+      const paymentMethodType = buy ? 'CREDIT_DEBIT_CARD' : opts.sellPaymentMethod!;
       const pair = { sourceCurrencyCode: buy ? 'USD' : currency, destinationCurrencyCode: buy ? currency : 'USD' };
       // Ask only the configured supplier. Never silently switch networks, suppliers or introduce a bridge/swap.
-      const quotes = await call('/payments/crypto/quote', {
-        ...pair, countryCode: p.countryCode, ...(p.subdivision ? { subdivision: p.subdivision } : {}),
-        sourceAmount: p.amount, paymentMethodType, walletAddress: p.walletAddress, externalCustomerId: p.customer,
-        serviceProviders: [provider],
-      });
-      const quote = (Array.isArray(quotes.quotes) ? quotes.quotes : []).map(record).find((q) =>
-        q.serviceProvider === provider && q.transactionType === (buy ? 'CRYPTO_PURCHASE' : 'CRYPTO_SELL') &&
-        q.sourceCurrencyCode === pair.sourceCurrencyCode && q.destinationCurrencyCode === pair.destinationCurrencyCode &&
-        q.paymentMethodType === paymentMethodType && Number(q.destinationAmount) > 0,
-      );
-      if (!quote) throw new Error('No eligible Meld quote for this amount, location and Algorand asset. Try a different amount or contact support.');
+      const quoteFor = async (sourceAmount: number) => {
+        const quotes = await call('/payments/crypto/quote', {
+          ...pair, countryCode: p.countryCode, ...(p.subdivision ? { subdivision: p.subdivision } : {}),
+          sourceAmount, paymentMethodType, walletAddress: p.walletAddress, externalCustomerId: p.customer,
+          serviceProviders: [provider],
+        });
+        const quote = (Array.isArray(quotes.quotes) ? quotes.quotes : []).map(record).find((q) =>
+          q.serviceProvider === provider && q.transactionType === (buy ? 'CRYPTO_PURCHASE' : 'CRYPTO_SELL') &&
+          q.sourceCurrencyCode === pair.sourceCurrencyCode && q.destinationCurrencyCode === pair.destinationCurrencyCode &&
+          q.paymentMethodType === paymentMethodType && Number(q.destinationAmount) > 0,
+        );
+        if (!quote) throw new Error('No eligible Meld quote for this amount, location and Algorand asset. Try a different amount or contact support.');
+        return quote;
+      };
+      let amount = p.amount;
+      let quote = await quoteFor(amount);
+      // Quotes price a card amount, but a payment without a balance needs a least amount of ALGO to arrive. Solve for the
+      // card amount: the ALGO's value at the quoted rate plus the last quote's fee, which settles within a few quotes
+      // whether the fee is a percentage or a fixed minimum.
+      for (let tries = 0; p.receive !== undefined && Number(quote.destinationAmount) < p.receive; tries++) {
+        const fee = Math.max(0, Number(quote.totalFee) || 0);
+        const rate = (amount - fee) / Number(quote.destinationAmount);
+        const value = p.receive * rate;
+        const next = Math.ceil((value + fee) * 1.005 * 100) / 100;
+        if (tries === 3 || !(rate > 0) || !Number.isFinite(next)) throw new Error('Meld couldn’t quote a card amount that covers this payment. Try again in a moment.');
+        if (next > value * 2 + 10) throw new Error('Card fees would be more than this payment. Pay a larger amount, or pay another way.');
+        amount = Math.max(next, amount + 0.01);
+        quote = await quoteFor(amount);
+      }
       const externalSessionId = sessionPrefix(p.customer) + crypto.randomUUID();
       const result = await call('/crypto/session/widget', {
         sessionType: p.side, externalCustomerId: p.customer, externalSessionId,
         sessionData: {
-          ...pair, countryCode: p.countryCode, sourceAmount: String(p.amount), paymentMethodType, serviceProvider: provider,
+          ...pair, countryCode: p.countryCode, sourceAmount: String(amount), paymentMethodType, serviceProvider: provider,
           walletAddress: p.walletAddress, clientIpAddress: p.userIp, redirectUrl: p.redirectURL,
           lockFields: ['walletAddress', 'sourceCurrencyCode', 'destinationCurrencyCode', 'sourceAmount', 'paymentMethodType'],
           ...(!buy ? { redirectFlow: true } : {}),
@@ -142,7 +175,7 @@ export function createRamp(opts: RampOptions) {
       const url = new URL(text(result.widgetUrl));
       if (url.protocol !== 'https:' || url.username || url.password || !origins.includes(url.origin)) throw new Error('Meld returned an unexpected checkout origin');
       if (!identifier.test(text(result.id)) || result.externalSessionId !== externalSessionId || result.externalCustomerId !== p.customer) throw new Error('Meld returned a different checkout session');
-      return { id: text(result.id), externalSessionId, url: url.href, environment: opts.environment };
+      return { id: text(result.id), externalSessionId, url: url.href, environment: opts.environment, amount };
     },
 
     /** Look up by the Meld session saved before checkout; redirects do not supply authoritative order information. */
@@ -156,8 +189,8 @@ export function createRamp(opts: RampOptions) {
       const currency = side === 'SELL' ? d.sourceCurrencyCode : d.destinationCurrencyCode;
       return {
         id: text(d.id), sessionId, externalSessionId: text(d.externalSessionId), status: text(d.status), side,
-        cryptoCurrency: currency === opts.usdcCurrencyCode ? 'USDC' : currency === opts.algoCurrencyCode ? 'ALGO' : text(currency),
-        network: currency === opts.usdcCurrencyCode || currency === opts.algoCurrencyCode ? 'algorand' : '',
+        cryptoCurrency: canSell && currency === opts.usdcCurrencyCode ? 'USDC' : currency === opts.algoCurrencyCode ? 'ALGO' : text(currency),
+        network: (canSell && currency === opts.usdcCurrencyCode) || currency === opts.algoCurrencyCode ? 'algorand' : '',
         cryptoAmount: String((side === 'SELL' ? d.sourceAmount : d.destinationAmount) ?? ''),
         fiatAmount: Number(side === 'SELL' ? d.destinationAmount : d.sourceAmount),
         fiatCurrency: text(side === 'SELL' ? d.destinationCurrencyCode : d.sourceCurrencyCode),
@@ -166,6 +199,7 @@ export function createRamp(opts: RampOptions) {
       };
     },
     sellProvider: opts.sellProvider,
+    canSell,
   };
 }
 

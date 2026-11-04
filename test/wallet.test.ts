@@ -13,6 +13,7 @@ import { startDevRelay } from '../tools/dev-relay.ts';
 import { ALGOD, createFakeChain, createFakeRouter, INDEXER } from './fakechain.ts';
 import { actor } from './helpers.ts';
 import { fakeMeld, MELD_TEST_OPTIONS } from './fakemeld.ts';
+import { meldOptions } from '../gateway/meld-config.ts';
 
 test('the wallet key comes from the account key, so the backup restores it', () => {
   const key = generateSecretKey();
@@ -137,7 +138,7 @@ test('Meld sessions use private versioned API calls, exact Algorand currency IDs
   const sessions = t.calls.filter((c) => c.url.endsWith('/crypto/session/widget'));
   const data = sessions.map((c) => c.body!.sessionData as Record<string, unknown>);
   assert.equal(data[0].destinationCurrencyCode, 'ALGO');
-  assert.equal(data[1].destinationCurrencyCode, 'USDC_ALGORAND');
+  assert.equal(data[1].destinationCurrencyCode, 'ALGO', 'purchases are ALGO, even when an older client asks for USDC');
   assert.equal(data[2].sourceCurrencyCode, 'USDC_ALGORAND');
   assert.equal(data[2].destinationCurrencyCode, 'USD');
   assert.equal(data[2].redirectFlow, true);
@@ -211,7 +212,7 @@ test('the gateway opens Meld only for signed member requests and never returns a
       const text = JSON.stringify(body);
       return gw(new Request(url, { method: 'POST', body: text, headers: { Authorization: authHeader(who.nostrKey, url, 'POST', text), 'Content-Type': 'application/json' } }), withIp ? { ip: '5.6.7.8' } : {});
     };
-    assert.deepEqual(await (await gw(new Request('https://gw.test/fg/wallet/config'))).json(), { ramp: true, provider: 'meld', environment: 'production' });
+    assert.deepEqual(await (await gw(new Request('https://gw.test/fg/wallet/config'))).json(), { ramp: true, provider: 'meld', environment: 'production', sell: true });
     const address = walletKeys(member.nostrKey).address;
     const request = { side: 'BUY', walletAddress: address, amount: 20, asset: 'ALGO', countryCode: 'US', subdivision: 'US-CA', redirectURL: 'https://app.test/' };
     const session = await post(member, request);
@@ -244,5 +245,58 @@ test('the gateway opens Meld only for signed member requests and never returns a
     assert.equal((await read()).status, 409);
     const off = createGateway({ relays: [relay.url], base: '/fg', appUrl: 'https://app.test/', fetch: t.fetch });
     assert.deepEqual(await (await off(new Request('https://gw.test/fg/wallet/config'))).json(), { ramp: false });
+  } finally { await relay.close(); }
+});
+
+test('card purchases are sized so enough ALGO arrives, whether the fee is a percentage or a minimum', async () => {
+  const member = actor();
+  const t = fakeMeld(walletKeys(generateSecretKey()).address);
+  t.algoUsd = 0.1;
+  const ramp = createRamp({ ...MELD_TEST_OPTIONS, fetch: t.fetch });
+  const base = { side: 'BUY' as const, walletAddress: walletKeys(member.nostrKey).address, customer: member.pubkey, redirectURL: 'https://app.test/', userIp: '1.2.3.4', countryCode: 'US' };
+  const receive = 51.741;
+  for (const minimumFee of [0, 3.99]) {
+    t.minimumFee = minimumFee;
+    const session = await ramp.session({ ...base, amount: 5, receive });
+    const widget = t.calls.filter((c) => c.url.endsWith('/crypto/session/widget')).at(-1)!.body!.sessionData as Record<string, unknown>;
+    assert.equal(widget.sourceAmount, String(session.amount));
+    assert.equal(widget.destinationCurrencyCode, 'ALGO');
+    const delivered = (session.amount - Math.max(session.amount * 0.02, minimumFee)) / 0.1;
+    assert.ok(delivered >= receive, `enough ALGO arrives: ${delivered}`);
+    assert.ok(delivered < receive * 1.02, `without overpaying: ${delivered} for $${session.amount}`);
+  }
+  t.minimumFee = 16;
+  await assert.rejects(ramp.session({ ...base, amount: 20, receive }), /Card fees would be more than this payment/);
+  await assert.rejects(ramp.session({ ...base, side: 'SELL', amount: 5, receive }), /invalid checkout/);
+});
+
+test('buying can open before a cash-out supplier is approved', async () => {
+  const relay = await startDevRelay(7798);
+  try {
+    const member = actor();
+    relay.events.push(member.binding);
+    const t = fakeMeld(walletKeys(generateSecretKey()).address);
+    const buyOnly = { ...MELD_TEST_OPTIONS, sellProvider: undefined, usdcCurrencyCode: undefined, sellPaymentMethod: undefined };
+    const ramp = createRamp({ ...buyOnly, fetch: t.fetch });
+    assert.equal(ramp.canSell, false);
+    const base = { side: 'BUY' as const, walletAddress: walletKeys(member.nostrKey).address, customer: member.pubkey, amount: 25, redirectURL: 'https://app.test/', userIp: '1.2.3.4', countryCode: 'US' };
+    assert.ok((await ramp.session(base)).url);
+    await assert.rejects(ramp.session({ ...base, side: 'SELL' }), /cashing out isn’t set up/);
+    assert.throws(() => createRamp({ ...buyOnly, sellProvider: 'TEST_SELL' }), /all of the cash-out/);
+    const settings = { MELD_API_KEY: 'key', MELD_BUY_PROVIDER: 'TEST_BUY', MELD_ALGO_CURRENCY_CODE: 'ALGO' };
+    assert.equal(meldOptions(settings, 'production').sellProvider, undefined);
+    assert.throws(() => meldOptions({ ...settings, MELD_SELL_PROVIDER: 'TEST_SELL' }, 'production'), /MELD_USDC_CURRENCY_CODE/);
+
+    const gw = createGateway({ relays: [relay.url], base: '/fg', appUrl: 'https://app.test/', fetch: t.fetch, ramp: buyOnly });
+    assert.deepEqual(await (await gw(new Request('https://gw.test/fg/wallet/config'))).json(), { ramp: true, provider: 'meld', environment: 'production', sell: false });
+    const post = (body: object) => {
+      const url = 'https://gw.test/fg/ramp/session';
+      const text = JSON.stringify(body);
+      return gw(new Request(url, { method: 'POST', body: text, headers: { Authorization: authHeader(member.nostrKey, url, 'POST', text), 'Content-Type': 'application/json' } }), { ip: '5.6.7.8' });
+    };
+    const request = { side: 'BUY', walletAddress: base.walletAddress, amount: 5, countryCode: 'US', redirectURL: 'https://app.test/' };
+    assert.equal((await post({ ...request, receive: 50 })).status, 200);
+    assert.equal((await post({ ...request, receive: -1 })).status, 400);
+    assert.equal((await post({ ...request, side: 'SELL' })).status, 503);
   } finally { await relay.close(); }
 });
