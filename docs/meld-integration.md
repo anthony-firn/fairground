@@ -4,6 +4,18 @@ Fairground uses Meld's retail ramp API (version `2026-02-03`) for hosted card pu
 The direct Transak adapter, token refresh and IPv4-only transport have been removed. Self-custody keys,
 ALGO setup, USDC opt-in, exchange-router validation and ordinary payments continue to run on the device.
 
+## What Fairground asks of Meld
+
+- **Purchases: native ALGO only, by card, into the buyer's own wallet.** Any Algorand account can receive ALGO without
+  setup, and the wallet converts it to USDC itself, so no supplier needs to offer USDC on Algorand for purchases.
+- **Most purchases pay for something straight away.** Someone paying or donating without a balance buys just enough
+  ALGO into their own wallet (the key is on their device); the wallet pays the recipient in USDC and closes, all
+  within seconds of delivery. Only people who keep a balance hold funds afterwards.
+- **Cash-outs: USDC on Algorand to a US bank**, only for people who keep a balance (creators being paid, the project
+  funds). They're configured separately, so purchases can open first, and a different supplier is fine.
+- **One integration serves every EvolveTech project.** Donations from the other projects go through Fairground's
+  support screen, so there's no separate checkout per site.
+
 ## Request flow
 
 1. The customer enters an amount and their US state. The initial app UI requests US/USD routes; the API accepts
@@ -14,8 +26,10 @@ ALGO setup, USDC opt-in, exchange-router validation and ordinary payments contin
    No quote means no checkout.
 3. The gateway calls `POST /crypto/session/widget`, pins both currencies, the amount, wallet and payment method,
    and opens the returned Meld-hosted `widgetUrl`. Identity checks, card/bank data and final fees live there.
-4. The app saves the returned session ID and external reference before opening checkout. A first purchase requests
-   ALGO; later purchases request native USDC on Algorand. Wallet setup/conversion runs after real chain confirmation.
+4. The app saves the returned session ID and external reference before opening checkout. Every purchase requests
+   ALGO. A wallet keeping a balance sets itself up and converts it after real chain confirmation; a payment without a
+   balance sends `receive`, the ALGO it needs, and the gateway solves for the card amount from Meld's quotes (see
+   below).
 5. For a sale, the provider returns to our original URL without adding an order ID. The wallet restores its saved
    session and fetches `/payments/transactions/sessions/{sessionId}` through the gateway. If the provider has not
    created the transaction yet, use Check cash-out/Resume cash-out to retry.
@@ -23,6 +37,16 @@ ALGO setup, USDC opt-in, exchange-router validation and ordinary payments contin
    from `sourceWalletAddress`. Ownership, session, supplier, status, currency, address and amount are checked before
    showing confirmation and rechecked immediately before signing. A confirmed previous transfer with this
    transaction memo is reused. Completed sessions are cleared; redirects never authorize a transfer.
+
+### Paying without a balance
+
+The app saves the payment (recipients, amounts and memos) before checkout, asks Folks Router what the total costs in
+ALGO, and adds 3% plus 0.241 ALGO for minimums and fees. The gateway quotes the card amount, then sets it to the
+ALGO's value at the quoted rate plus the last quote's fee, re-quoting until enough would arrive (at most four
+quotes), and refuses when fees would exceed the payment. The widget locks that amount. When the ALGO arrives, the
+wallet opts in, converts, and in one group pays every recipient and closes into the first, leaving nothing. A banner
+finishes it after a reload or in the tab Meld returns to. The protocol details are in
+[protocol.md](protocol.md#paying-without-a-balance).
 
 The public-chain indexer can lag: the duplicate-transfer lookup is a recovery aid, not an atomic, cross-device
 payment lock. Do not confirm a cash-out simultaneously on multiple devices. Provider-specific deposit memos are
@@ -40,16 +64,17 @@ For the website's Netlify Edge function, set private environment values, then re
 MELD_PAYMENTS_ENABLED=false
 MELD_API_KEY=<production private API key>
 MELD_BUY_PROVIDER=<approved supplier ID>
-MELD_SELL_PROVIDER=<approved supplier ID>
 MELD_ALGO_CURRENCY_CODE=<canonical native Algorand ALGO ID>
+# Cash-outs: all three, or none to leave them off.
+MELD_SELL_PROVIDER=<approved supplier ID>
 MELD_USDC_CURRENCY_CODE=<canonical native Algorand USDC ID>
 MELD_SELL_PAYMENT_METHOD=<approved bank payout method ID>
 # Optional white-labelled Meld checkout origins, comma separated:
 # MELD_CHECKOUT_ORIGINS=https://meldcrypto.com
 ```
 
-Enable `MELD_PAYMENTS_ENABLED=true` only with working production routes. A missing key/route leaves the wallet's
-ramp disabled. Sandbox keys stay in the loopback-only preview. Netlify calls Meld directly; the old
+Enable `MELD_PAYMENTS_ENABLED=true` only with working production routes. A missing key or purchase route leaves the
+wallet's ramp disabled; without the three cash-out settings, purchases work and Cash out shows exchange instructions. Sandbox keys stay in the loopback-only preview. Netlify calls Meld directly; the old
 `PAYMENTS_ORIGIN` and `PAYMENTS_PROXY_SECRET` forwarding configuration is no longer read by the website edge.
 Its request limit is per edge isolate, not a global account quota. Meld/provider account limits still apply.
 
@@ -70,13 +95,16 @@ No secrets or private configuration are committed or copied into the app build.
 
 `npm test`, `npm run typecheck`, `npm run app:build`, `npm run gateway:build`, and `node e2e/wallet.ts`
 validate protocol behavior, the adapter contract and the built browser wallet with in-process Meld and chain fixtures.
-The browser test covers first ALGO deposit and conversion, later USDC deposits, fan payments, saved-session cash-out,
-changed-owner rejection at signing time, completed-session cleanup, and development donations. The same browser test covers the independent crypto-transfer path documented in
+The browser test covers first ALGO deposit and conversion, later ALGO deposits, fan payments, saved-session cash-out,
+changed-owner rejection at signing time, completed-session cleanup, development donations, and a newcomer paying a
+creator and a split donation by card without a balance (one purchase each, wallet left closed). The same browser test covers the independent crypto-transfer path documented in
 [Use crypto you already own](crypto-transfers.md).
 
 These tests do not prove live supplier availability. Meld must still provide credentials and confirm the supplier,
 California/customer eligibility, adult-content-related wallet activity, asset IDs, minimums, fees, field locks,
-redirect behavior and unique-address cash-out requirements. Test real Meld sandbox sessions once credentials exist.
+redirect behavior and unique-address cash-out requirements. For paying without a balance, also confirm that the
+purchase supplier accepts a buyer forwarding their own purchase straight away, that quotes include `totalFee`, and the
+minimum card purchase (it sets the smallest card payment). Test real Meld sandbox sessions once credentials exist.
 No provider API keys or live checkout were used to implement this migration. Production deployment and real purchases
 are separate operational steps; this change does not delete cloud resources or revoke old provider credentials.
 

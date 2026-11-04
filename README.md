@@ -55,10 +55,14 @@ overdue, days to pay) are public, so creators can see who pays before accepting.
 derived from the account's own key, so the backup code and the username-and-password vault restore it, and payments
 are signed on the device in one tap. Nobody else, Fairground included, can move the money, and Fairground funds no
 one's wallet. Card purchases and bank withdrawals use a server-created Meld checkout with explicitly configured
-suppliers and native Algorand currency IDs. The first deposit buys ALGO for setup, USDC opt-in and a reserve;
-the remainder converts to USDC through Folks Router after checking every transaction the router asks it to sign.
-Later deposits buy USDC directly. Cash-out instructions are fetched from Meld using the saved checkout session and
-checked against the wallet, owner and exact amount again before signing. Providers handle KYC and payment details.
+suppliers and native Algorand currency IDs. Card purchases always buy ALGO, which any wallet can receive; the first
+one also pays for setup (USDC opt-in and a reserve), and the wallet converts the rest to USDC through Folks Router
+after checking every transaction the router asks it to sign. **Paying or donating needs no balance**: the payer buys
+just enough ALGO, by card or from an exchange, and their wallet turns it into the exact USDC payment and closes in the
+same step, so nothing is left behind and only people who keep a balance, get paid or cash out set a wallet up.
+Cash-outs are configured separately, so buying can open first; their instructions are fetched from Meld using the
+saved checkout session and checked against the wallet, owner and exact amount again before signing. Providers handle
+KYC and payment details.
 Live routes still require Meld credentials and supplier eligibility; see [Meld integration](docs/meld-integration.md).
 External wallets and exchange transfers remain available independently of card/bank checkout. Wallet, Add money and
 payment screens include copyable addresses, QR codes and exchange instructions; see [Use crypto you already own](docs/crypto-transfers.md).
@@ -179,9 +183,15 @@ the account's vault on relays: keys, settings, AI interests, subscriptions, payo
   deterministic Falcon signature that general-purpose JavaScript libraries don't produce (we checked: Algorand rejects
   a standard Falcon signature). The wallet can be rekeyed to a Falcon key, keeping its address, once a compatible
   signer exists. Contracts stay hybrid-signed, and anyone can be paid into a Falcon account in Pera instead.
-- **A wallet's first deposit pays for its own setup.** About five cents of it stays as ALGO for Algorand's account
-  minimum and fees, and converting the rest costs the router's 0.1% plus the exchange's fee and a little price
-  movement (at most 0.5% below the quote, or the conversion fails). The provider's minimum purchase applies.
+- **Keeping a balance means a one-time setup, paid from the first deposit.** About five cents of it stays as ALGO
+  for Algorand's account minimum and fees, and converting the rest costs the router's 0.1% plus the exchange's fee and
+  a little price movement (at most 0.5% below the quote, or the conversion fails). The provider's minimum purchase
+  applies.
+- **Paying without a balance buys about 3% more ALGO than the payment**, against conversion costs and prices moving
+  during checkout, plus 0.24 ALGO for minimums and fees; whatever is left goes to the recipient with the payment. Each
+  card payment pays the provider's fee, so someone who pays often is better off keeping a balance, and a provider's
+  minimum purchase can rule out small card payments. If prices move more than the buffer, the payment waits for a
+  little more ALGO, or the payer keeps what arrived as a balance.
 - **In-app buying and selling use Meld.** Supplier approval and credentials are still external prerequisites.
   The initial interface requests US/USD routes and collects the customer's state; a quote checks availability and
   the provider shows final fees and handles identity checks. A configured route is not proof of production approval.
@@ -231,7 +241,7 @@ node e2e/smoke.ts         # end-to-end test of the built app in Chrome, against 
 node e2e/market.ts        # two people: comments, safety, buying, requests, offers and orders
 node e2e/media.ts         # photos, videos, shorts, listening, search, languages, and the desktop and phone layouts
 node e2e/podcast.ts       # a show and episode, a campaign, a recorded read, approval, playback, RSS and stitching, donating
-node e2e/wallet.ts        # a first deposit setting up a wallet, paying in one tap, cashing out, donating (stand-ins)
+node e2e/wallet.ts        # a first deposit setting up a wallet, paying in one tap, cashing out, donating, paying without a balance (stand-ins)
 npm run gateway:build     # bundles the podcast gateway into dist-gateway/fairground-gateway.js
 ```
 

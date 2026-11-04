@@ -3,6 +3,14 @@
 Card checkout is optional. Fairground's wallet can receive transfers from an exchange or another Algorand wallet
 without Meld. The same transfer instructions are reachable from Wallet, Add money and the donation/payment screens.
 
+## Pay without a balance
+
+To pay or donate once, there's nothing to set up. In a payment or donation, choose **Pay without a balance → Send ALGO
+from an exchange**. Fairground shows how much ALGO to send (the payment at the current exchange rate plus 3%, plus
+0.241 ALGO for minimums and fees) and your Fairground address. When it arrives, the wallet pays in USDC with the right
+note and closes, so nothing stays in it; anything above what the payment needs goes to the recipient. A donation to
+several recipients is one transfer. This works without Meld, and the same sheet offers card checkout when it's on.
+
 ## Transfer into Fairground
 
 1. Open **Wallet → Transfer crypto I already own** (new wallet), **Receive** (active wallet), or **Add money → Transfer

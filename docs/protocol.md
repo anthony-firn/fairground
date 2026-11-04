@@ -465,8 +465,24 @@ as payment links.
 Fairground funds no wallet. A wallet's first deposit is ALGO (Algorand needs 0.2 ALGO in an account before it can hold
 USDC). Once at least 0.201 ALGO has arrived, the wallet opts in to USDC (a zero-amount USDC transfer to itself), keeps
 0.5 ALGO for its minimum balance and about 300 fees, and converts everything above that, less 0.01 ALGO for the
-conversion's own fees, to USDC. Later deposits are USDC. When fewer than 50 fees' worth of ALGO remain and at least
-$0.20 of USDC does, the wallet converts $0.10 of USDC back to ALGO before its next payment.
+conversion's own fees, to USDC. Later card deposits are ALGO too and convert the same way; exchange transfers can be
+either. When fewer than 50 fees' worth of ALGO remain and at least $0.20 of USDC does, the wallet converts $0.10 of
+USDC back to ALGO before its next payment.
+
+### Paying without a balance
+
+A wallet that isn't set up can still pay, without keeping anything. The client saves the payment requests (at most
+14), then waits for ALGO: bought by card for the amount Folks Router quotes for the total, plus 3%, plus 0.241 ALGO
+(minimums, the opt-in and fees), or sent from an exchange. Once it arrives the wallet opts in to USDC, converts
+everything above 0.24 ALGO to USDC, and submits one group: a USDC transfer with its memo to each recipient but the
+first, then the first recipient's transfer with `aclose` set to them, then a zero ALGO payment with `close` set to
+them. The wallet is left empty and closed; the first recipient also receives the leftover USDC and the released
+minimums. Each transfer is an ordinary payment with an ordinary memo, so every existing check accepts it.
+
+If prices moved and the USDC falls short, nothing is paid: the wallet waits for more ALGO, or the payer keeps what
+arrived as a balance. Donations instead pay what arrived, split in the same proportions. The client closes only a
+holding the payment itself opted in, never a wallet that held a balance, and before retrying it looks for transfers
+it already made with the same memos.
 
 Conversions go through Folks Router (application 3279848327), at its minimum fee of 10 basis points and at most 50
 basis points below the quote. The wallet signs the router's transactions only if all are from the wallet, none rekeys
@@ -480,10 +496,14 @@ Wallet and ramp calls carry a NIP-98 `Authorization: Nostr <base64 event>` heade
 `method`, and `payload` (SHA-256 of the body) when there is one, created within 60 seconds. Only members (accounts
 with a key binding) are served.
 
-- `GET /wallet/config` → `{ ramp: boolean, provider?: "meld", environment?: "sandbox" | "production" }`.
-- `POST /ramp/session` `{ side: "BUY" | "SELL", walletAddress, amount, asset?: "USDC" | "ALGO", countryCode, subdivision?, redirectURL }`
-  → `{ url, id, externalSessionId, environment }`. The gateway first requests an eligible quote from its configured
-  supplier for the exact Algorand asset, then creates a versioned Meld widget session. The signed member's pubkey
+- `GET /wallet/config` → `{ ramp: boolean, provider?: "meld", environment?: "sandbox" | "production", sell?: boolean }`.
+  `ramp` means card purchases are configured; `sell`, that cash-outs are too.
+- `POST /ramp/session` `{ side: "BUY" | "SELL", walletAddress, amount, countryCode, subdivision?, redirectURL, receive? }`
+  → `{ url, id, externalSessionId, environment, amount }`. Purchases are always native ALGO and cash-outs USDC (an
+  older client's `asset` is ignored). With `receive` (ALGO, purchases only), the gateway sets the card amount so at
+  least that much arrives, from up to four quotes' rates and fees, and refuses if the fees would exceed the payment.
+  The gateway requests an eligible quote from its configured supplier for the exact Algorand asset, then creates a
+  versioned Meld widget session. The signed member's pubkey
   is `externalCustomerId`. Credentials stay on the gateway. Wallet/currency/amount/payment method locks are requested.
 - `GET /ramp/order/<sessionId>` → `{ order, problem }`. A strict owner check precedes any response. A cash-out must
   use the configured supplier, native USDC on Algorand, USD, pending status and the provider's destination wallet.
