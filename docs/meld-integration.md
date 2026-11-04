@@ -13,13 +13,16 @@ ALGO setup, USDC opt-in, exchange-router validation and ordinary payments contin
   within seconds of delivery. Only people who keep a balance hold funds afterwards.
 - **Cash-outs: USDC on Algorand to a US bank**, only for people who keep a balance (creators being paid, the project
   funds). They're configured separately, so purchases can open first, and a different supplier is fine.
+- **Global.** Anyone can use Fairground, so checkout is offered wherever Meld's providers can serve the customer;
+  provider KYC decides eligibility. The app asks for a US state today, and a country picker is next.
 - **One integration serves every EvolveTech project.** Donations from the other projects go through Fairground's
   support screen, so there's no separate checkout per site.
 
 ## Request flow
 
-1. The customer enters an amount and their US state. The initial app UI requests US/USD routes; the API accepts
-   country and subdivision for future country selectors. Provider KYC determines actual eligibility.
+1. The customer enters an amount and their location. The app currently asks for a US state and requests US/USD
+   routes; the gateway already accepts any country and subdivision, and a country picker is next. Provider KYC
+   determines actual eligibility.
 2. A signed member request reaches `/fairground/ramp/session`. The gateway checks the supplier’s currency catalog
    for the Algorand chain and native USDC asset ID (31566704), rejecting ambiguous tickers and other chains.
    It requests a fresh quote only from the configured supplier, for the exact configured Algorand currency.

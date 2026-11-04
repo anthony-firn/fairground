@@ -193,7 +193,8 @@ the account's vault on relays: keys, settings, AI interests, subscriptions, payo
   minimum purchase can rule out small card payments. If prices move more than the buffer, the payment waits for a
   little more ALGO, or the payer keeps what arrived as a balance.
 - **In-app buying and selling use Meld.** Supplier approval and credentials are still external prerequisites.
-  The initial interface requests US/USD routes and collects the customer's state; a quote checks availability and
+  Fairground is global; the interface currently requests US/USD routes and collects the customer's state, and a
+  country picker is next. A quote checks availability and
   the provider shows final fees and handles identity checks. A configured route is not proof of production approval.
 - **The iOS app** will need publishing from an Apple developer account enrolled as an organization, which Apple
   requires of apps with wallets.
