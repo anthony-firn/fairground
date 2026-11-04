@@ -4,7 +4,8 @@ import QRCode from 'qrcode';
 import { USDC_ASSET_ID } from '@core/rails/algorand.ts';
 import { useApp } from '../context.ts';
 import { LOCAL_PILOT } from '../lib/pilot.ts';
-import { useSettle, useWallet } from '../lib/wallet.ts';
+import { pendingPassThrough, useSettle, useWallet } from '../lib/wallet.ts';
+import { PaymentWaiting } from './PassThroughPay.tsx';
 import { Segmented, Sheet } from './ui.tsx';
 
 export function CryptoFundingSheet({ onClose }: { onClose: () => void }) {
@@ -25,6 +26,8 @@ export function CryptoFundingSheet({ onClose }: { onClose: () => void }) {
     return () => { stopped = true; };
   }, [link]);
   const name = provider === 'coinbase' ? 'Coinbase' : provider === 'kraken' ? 'Kraken' : 'your wallet or exchange';
+  const waiting = pendingPassThrough(account);
+  if (waiting) return <PaymentWaiting label={waiting.label} onClose={onClose} />;
   return (
     <Sheet title="Transfer crypto to Fairground" onClose={onClose}>
       <p className="small">Already have crypto? Send it from an exchange or another wallet. This works independently of card checkout.</p>

@@ -1,8 +1,9 @@
 /**
  * End-to-end test of the built-in wallet: a first deposit (ALGO, bought by card) sets the wallet up and is converted to
- * dollars, later deposits buy dollars directly, a creator is paid into their wallet, a fan pays in one tap, the creator
- * cashes out through a Meld order checked before anything moves, and a donation is paid from the wallet. Algorand,
- * the exchange router, the gateway and Meld are in-process stand-ins; nothing real is touched or funded.
+ * dollars, later deposits are converted too, a creator is paid into their wallet, a fan pays in one tap, the creator
+ * cashes out through a Meld order checked before anything moves, and a donation is paid from the wallet. A newcomer
+ * then supports the creator and donates by card without ever setting up a wallet. Algorand, the exchange router, the
+ * gateway and Meld are in-process stand-ins; nothing real is touched or funded.
  *
  *   npm run app:build && node e2e/wallet.ts [screenshot-dir]
  */
@@ -41,6 +42,7 @@ chain.fund(DEVELOPMENT_ADDRESS!, 200_000n, 0n);
 const meldDeposit = algosdk.generateAccount().addr.toString();
 chain.fund(meldDeposit, 200_000n, 0n);
 const meld = fakeMeld(meldDeposit);
+meld.algoUsd = 0.1; // The same price as the router's.
 const sessions = () => [...meld.sessions.values()].map((s) => s.sessionData as Record<string, unknown>);
 const gw = createGateway({
   relays: [relay.url], base: '/fairground', appUrl: url,
@@ -150,7 +152,7 @@ try {
   assert.ok(fanState.algo >= 400_000n && fanState.algo <= 520_000n, `a reserve for fees: ${fanState.algo}`);
   await shot(fan.page, 'wallet');
 
-  step('later deposits buy dollars directly');
+  step('later deposits arrive as ALGO too, and the wallet converts them');
   await fan.page.getByRole('button', { name: 'Add money' }).click();
   const popup2 = fan.page.waitForEvent('popup');
   await fan.page.getByRole('textbox', { name: 'US state', exact: true }).fill('CA');
@@ -158,7 +160,7 @@ try {
   const widget2 = await popup2;
   await widget2.waitForURL(/token=session-/);
   await widget2.close();
-  assert.equal(sessions().at(-1)!.destinationCurrencyCode, 'USDC_ALGORAND');
+  assert.equal(sessions().at(-1)!.destinationCurrencyCode, 'ALGO');
   await fan.page.keyboard.press('Escape');
 
   step('a creator sets up their wallet with a small first deposit and is paid into it');
@@ -277,6 +279,63 @@ try {
   await fan.page.getByRole('dialog', { name: 'Donate to donation-relay.test', exact: true }).waitFor({ state: 'hidden', timeout: 15000 });
   assert.equal(usdcOf(relayAddress), 2_500_000n);
   assert.equal(usdcOf(DEVELOPMENT_ADDRESS!), 7_500_000n);
+
+  // Meld delivers what its quote promised for the card amount: 2% off, at $0.10 per ALGO.
+  const delivered = (s: Record<string, unknown>) => BigInt(Math.floor(Number(s.sourceAmount) * 0.98 / 0.1 * 1e6));
+  async function payByCard(page: Page) {
+    await page.getByRole('textbox', { name: 'US state', exact: true }).fill('CA');
+    const popup = page.waitForEvent('popup');
+    await page.getByRole('button', { name: 'Pay by card with Meld', exact: true }).click();
+    const checkout = await popup;
+    await checkout.waitForURL(/token=session-/);
+    await checkout.close();
+    await page.getByText('Finish in the Meld window.', { exact: false }).waitFor();
+    const purchase = sessions().at(-1)!;
+    assert.equal(purchase.destinationCurrencyCode, 'ALGO');
+    return purchase;
+  }
+
+  step('a newcomer supports the creator by card, without setting up a wallet');
+  const newcomer = await person();
+  await go(newcomer.page, `/p/${creator.pubkey}`);
+  await newcomer.page.getByRole('button', { name: 'Support', exact: true }).click();
+  await newcomer.page.getByRole('button', { name: /Support with \$5\.00 this month/ }).click();
+  await newcomer.page.getByRole('button', { name: 'Pay $5.00 without a balance', exact: true }).click();
+  await newcomer.page.getByRole('button', { name: 'Pay by card with Meld', exact: true }).waitFor();
+  await newcomer.page.waitForTimeout(400);
+  await shot(newcomer.page, 'pay-without-balance');
+  await newcomer.page.setViewportSize({ width: 390, height: 844 });
+  const sheet = newcomer.page.getByRole('dialog').last();
+  assert.ok(await sheet.evaluate((e) => e.scrollWidth <= e.clientWidth), 'the payment sheet fits a phone');
+  await shot(newcomer.page, 'pay-without-balance-mobile');
+  await newcomer.page.setViewportSize({ width: 1280, height: 900 });
+  const purchase = await payByCard(newcomer.page);
+  const newcomerWallet = String(purchase.walletAddress);
+  const creatorBefore = usdcOf(creatorWallet)!;
+  chain.fund(newcomerWallet, delivered(purchase));
+  await newcomer.page.getByText('Thank you for supporting them.').waitFor({ timeout: 30000 });
+  const viaCard = chain.txns.find((t) => t.sender === newcomerWallet && t.receiver === creatorWallet && t.type === 'axfer' && t.amount === 5_000_000n)!;
+  assert.equal(new TextDecoder().decode(viaCard.note), `fairground:support:${creator.pubkey}`);
+  assert.ok(usdcOf(creatorWallet)! - creatorBefore >= 5_000_000n, 'the creator got the payment, and the buffer');
+  assert.deepEqual(chain.accounts.get(newcomerWallet), { algo: 0n, usdc: null }, 'nothing left in the newcomer’s wallet');
+
+  step('the newcomer donates to development and a relay by card, in one purchase');
+  relay.events.push(finalizeEvent({ kind: 3, created_at: Math.floor(Date.now() / 1000), tags: [['p', newcomer.pubkey]], content: '' }, operator.nostrKey));
+  await newcomer.ctx.route('https://donation-relay.test/**', (r) => r.fulfill({ contentType: 'application/nostr+json', body: JSON.stringify({ pubkey: operator.pubkey }) }));
+  await go(newcomer.page, '/you');
+  await newcomer.page.getByRole('button', { name: 'Support Fairground', exact: true }).click();
+  await newcomer.page.getByText('donation-relay.test', { exact: true }).waitFor({ timeout: 15000 });
+  await newcomer.page.getByRole('button', { name: 'Donate $5.00 · 2 payments', exact: true }).click();
+  await newcomer.page.getByRole('dialog', { name: 'Donate to 2 recipients', exact: true }).waitFor();
+  const purchases = meld.sessions.size;
+  const donation = await payByCard(newcomer.page);
+  assert.equal(meld.sessions.size, purchases + 1, 'one purchase pays both');
+  assert.equal(donation.walletAddress, newcomerWallet);
+  chain.fund(newcomerWallet, delivered(donation));
+  await newcomer.page.getByText('Thank you. Your donation went straight to them.', { exact: false }).waitFor({ timeout: 30000 });
+  assert.equal(usdcOf(relayAddress), 5_000_000n, 'the relay got exactly its share');
+  assert.ok(usdcOf(DEVELOPMENT_ADDRESS!)! >= 10_000_000n);
+  assert.deepEqual(chain.accounts.get(newcomerWallet), { algo: 0n, usdc: null });
 
   assert.deepEqual(errors, [], 'no page errors');
   console.log('wallet e2e passed');

@@ -2,13 +2,15 @@
 import { authHeader } from '@core/httpauth.ts';
 import { algorandUsdc, USDC_ASSET_ID } from '@core/rails/algorand.ts';
 import type { PaymentRequest, Transfer } from '@core/rails/rail.ts';
+import { algoToBuy, convert, paidAlready, passThrough, type PassThrough } from '@core/passthrough.ts';
 import { sellOrderProblem, type RampOrder, type RampSession } from '@core/ramp.ts';
-import { prepareSwap, quoteSwap, signSwap, swapProblem } from '@core/swap.ts';
 import {
   confirmed, convertibleAlgo, needsFeeTopUp, sign, submit, suggestedParams, usdcOptIn, usdcPayment, walletKeys, walletState,
 } from '@core/wallet.ts';
 import type { Account } from './account.ts';
-import { gatewayUrl, walletChanged, pendingRamp, rememberRamp, forgetRamp } from './wallet.ts';
+import {
+  gatewayUrl, walletChanged, pendingRamp, rememberRamp, forgetRamp, pendingPassThrough, savePassThrough, type PendingPassThrough,
+} from './wallet.ts';
 import { LOCAL_PILOT, requireRealPayments } from './pilot.ts';
 import { parseUsd } from '@core/pricing.ts';
 
@@ -24,14 +26,7 @@ async function call<T>(account: Account, path: string, method: 'GET' | 'POST', b
 }
 
 /** Converts ALGO or USDC through the exchange router, after checking exactly what the router asks the wallet to sign. */
-async function swap(account: Account, from: number, to: number, amount: bigint): Promise<void> {
-  const keys = walletKeys(account.nostrKey);
-  const q = await quoteSwap(from, to, amount);
-  const raw = await prepareSwap(keys.address, q);
-  const problem = swapProblem(raw, keys.address, q);
-  if (problem) throw new Error(`The conversion was refused: ${problem}.`);
-  await confirmed(await submit(signSwap(raw, keys.seed)));
-}
+const swap = (account: Account, from: number, to: number, amount: bigint): Promise<void> => convert(walletKeys(account.nostrKey), from, to, amount);
 
 /**
  * Finishes a wallet's setup after its first deposit (ALGO): lets it hold USDC, then converts everything above the
@@ -75,12 +70,18 @@ export async function payFromWallet(account: Account, request: PaymentRequest): 
   return { id: txid, sender: keys.address, receiver: request.to, amount: request.amount, note: request.memo, time: Math.floor(Date.now() / 1000) };
 }
 
-/** Create a Meld checkout on the gateway and save its correlation before navigating away. */
-export async function rampSession(account: Account, side: 'BUY' | 'SELL', walletAddress: string, amount: number, asset: 'USDC' | 'ALGO', subdivision: string): Promise<string> {
+/**
+ * Create a Meld checkout on the gateway and save its correlation before navigating away. Purchases are ALGO; with
+ * `receive` (micro-ALGO), the gateway sets the card amount so at least that much arrives.
+ */
+export async function rampSession(account: Account, side: 'BUY' | 'SELL', walletAddress: string, amount: number, subdivision: string, receive?: bigint): Promise<string> {
   const back = `${location.origin}${location.pathname}?ramp=${side.toLowerCase()}`;
-  const session = await call<RampSession>(account, '/ramp/session', 'POST', { side, walletAddress, amount, asset, countryCode: 'US', subdivision, redirectURL: back });
+  const session = await call<RampSession>(account, '/ramp/session', 'POST', {
+    side, walletAddress, amount, asset: side === 'BUY' ? 'ALGO' : 'USDC', countryCode: 'US', subdivision, redirectURL: back,
+    ...(receive === undefined ? {} : { receive: Number(receive) / 1e6 }),
+  });
   if (session.environment === 'sandbox' && !LOCAL_PILOT) throw new Error('Sandbox checkout cannot be used with this mainnet wallet.');
-  rememberRamp(account, { id: session.id, externalSessionId: session.externalSessionId, side, walletAddress, amount, environment: session.environment });
+  rememberRamp(account, { id: session.id, externalSessionId: session.externalSessionId, side, walletAddress, amount: session.amount ?? amount, environment: session.environment });
   return session.url;
 }
 
@@ -110,4 +111,63 @@ export async function payCashOut(account: Account, sessionId: string): Promise<v
     await payFromWallet(account, { to: order.walletAddress, amount: parseUsd(order.cryptoAmount), memo });
   }
   forgetRamp(account, sessionId);
+}
+
+const requestsOf = (p: PendingPassThrough): PaymentRequest[] => p.requests.map((r) => ({ to: r.to, amount: BigInt(r.amount), memo: r.memo }));
+
+/**
+ * Starts a payment without a balance: checks every recipient can receive USDC, works out how much ALGO it takes, and
+ * saves it so it finishes whenever that ALGO arrives, by card or from an exchange.
+ */
+export async function startPassThrough(account: Account, label: string, requests: PaymentRequest[], via: 'card' | 'transfer', flexible = false): Promise<PendingPassThrough> {
+  requireRealPayments();
+  const keys = walletKeys(account.nostrKey);
+  if ((await walletState(keys.address)).active) throw new Error('Your wallet holds a balance, so pay from it instead.');
+  for (const r of requests) {
+    if (!(await algorandUsdc.canReceive(r.to))) throw new Error('A recipient’s wallet can’t receive payments yet, so nothing was charged.');
+  }
+  const total = requests.reduce((n, r) => n + r.amount, 0n);
+  const pending: PendingPassThrough = {
+    label, via, flexible, requests: requests.map((r) => ({ to: r.to, amount: r.amount.toString(), memo: r.memo })),
+    need: (await algoToBuy(total)).toString(), created: Math.floor(Date.now() / 1000),
+  };
+  savePassThrough(account, pending);
+  return pending;
+}
+
+/** Opens card checkout for the ALGO a pending payment still needs; `short` is what a first purchase came in under. */
+export async function passThroughCheckout(account: Account, subdivision: string, short?: bigint): Promise<string> {
+  const pending = pendingPassThrough(account);
+  if (!pending) throw new Error('That payment was already finished or cancelled.');
+  const owed = short ?? requestsOf(pending).reduce((n, r) => n + r.amount, 0n);
+  const receive = short === undefined ? BigInt(pending.need) : await algoToBuy(short);
+  // A first guess at the card amount; the gateway corrects it from Meld's quotes.
+  return rampSession(account, 'BUY', walletKeys(account.nostrKey).address, Math.ceil(Number(owed) / 10_000 * 1.05 + 100) / 100, subdivision, receive);
+}
+
+/**
+ * Takes the next step of the pending payment with whatever ALGO has arrived. One tab at a time does this, and a payment
+ * that already went through (before a reload, or in the tab Meld returned to) is found rather than repeated.
+ */
+export async function finishPassThrough(account: Account, requests: PaymentRequest[]): Promise<PassThrough> {
+  requireRealPayments();
+  const run = async (): Promise<PassThrough> => {
+    const pending = pendingPassThrough(account);
+    const keys = walletKeys(account.nostrKey);
+    if (!pending) {
+      const elsewhere = await paidAlready(keys.address, requests, Math.floor(Date.now() / 1000) - 86_400, algorandUsdc);
+      if (elsewhere) return { status: 'paid', transfers: elsewhere };
+      throw new Error('That payment was cancelled.');
+    }
+    const earlier = await paidAlready(keys.address, requestsOf(pending), pending.created - 60, algorandUsdc).catch(() => undefined);
+    const result = earlier ? { status: 'paid' as const, transfers: earlier } : await passThrough(keys, requestsOf(pending), {
+      ownsHolding: !!pending.ownsHolding, flexible: pending.flexible,
+      onSetUp: () => savePassThrough(account, { ...pending, ownsHolding: true }),
+    });
+    if (result.status === 'paid') savePassThrough(account, null);
+    walletChanged();
+    return result;
+  };
+  const locks = (navigator as Navigator & { locks?: LockManager }).locks;
+  return locks ? locks.request(`fairground-pass-through-${account.pubkey}`, run) : run();
 }

@@ -1,8 +1,9 @@
 /**
  * The wallet: a balance in dollars, money in and out of a bank through Meld, sending and receiving, and what came
  * and went. The money is USDC (digital dollars) on Algorand in an account only this device can sign for; Fairground
- * never holds it or funds it. A wallet is set up by its owner's first deposit. Until in-app buying and selling is
- * switched on, exchanges can send to and receive from it directly.
+ * never holds it or funds it. A wallet is set up by its owner's first deposit, which only people who keep a balance,
+ * get paid or cash out need: paying and donating work without one (PassThroughPay). Until in-app buying and selling
+ * is switched on, exchanges can send to and receive from it directly.
  */
 import { useEffect, useState } from 'react';
 import { DEVELOPMENT_ADDRESS } from '@core/defaults.ts';
@@ -11,11 +12,12 @@ import type { Transfer } from '@core/rails/rail.ts';
 import { formatUsd, parseUsd } from '@core/pricing.ts';
 import { feesLeft } from '@core/walletkey.ts';
 import { CryptoFundingSheet } from '../components/CryptoFunding.tsx';
+import { PaymentWaiting } from '../components/PassThroughPay.tsx';
 import { Field, Sheet, TopBar } from '../components/ui.tsx';
 import { useApp } from '../context.ts';
 import { payoutAddress } from '../lib/data.ts';
 import { balance, nowSeconds, timeAgo, usd } from '../lib/format.ts';
-import { getPaidHere, useSettle, useWallet, walletChanged, walletConfig, pendingRamp, pendingRamps } from '../lib/wallet.ts';
+import { getPaidHere, useSettle, useWallet, walletChanged, walletConfig, pendingPassThrough, pendingRamp, pendingRamps } from '../lib/wallet.ts';
 import { LOCAL_PILOT } from '../lib/pilot.ts';
 
 const actions = () => import('../lib/walletActions.ts');
@@ -44,6 +46,7 @@ export function FirstDeposit({ compact, active }: { compact?: boolean; active?: 
   return (
     <div className="card stack">
       <strong>Set up your wallet with a first deposit</strong>
+      {!compact && <span className="small">Only needed to keep a balance, get paid or cash out. To pay or donate, you can pay by card or from an exchange as you go; nothing stays in your wallet.</span>}
       <span className="small">Already have crypto? Transfer ALGO from Coinbase, Kraken or another wallet. Fairground sets up your wallet when it arrives.</span>
       {!compact && <span className="tiny muted">Your first ALGO deposit covers setup and network fees; larger deposits are converted to USDC.</span>}
       <button type="button" className="btn primary" onClick={() => setReceiving(true)}>Transfer crypto I already own</button>
@@ -73,14 +76,14 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
   const [subdivision, setSubdivision] = useState('');
   const [starting, setStarting] = useState(false);
   const buy = side === 'BUY';
-  // Until the wallet is set up, deposits arrive as ALGO, which it needs before it can hold dollars.
-  const asset = buy && !state?.active ? 'ALGO' : 'USDC';
+  // Deposits arrive as ALGO, which any wallet can receive; the wallet sets itself up and converts it to dollars.
+  const firstDeposit = buy && !state?.active;
   async function open() {
     setStarting(true);
     // Open the window first, in the click, so browsers don't block it; then point it at the session.
     const win = window.open('about:blank', '_blank');
     try {
-      const url = await (await actions()).rampSession(account, side, address, Number(amount), asset, `US-${subdivision}`);
+      const url = await (await actions()).rampSession(account, side, address, Number(amount), `US-${subdivision}`);
       if (win) win.location.href = url;
       else location.href = url;
       setOpened(true);
@@ -90,6 +93,8 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
     } finally { setStarting(false); }
   }
   if (receiving) return <CryptoFundingSheet onClose={() => setReceiving(false)} />;
+  const waiting = buy ? pendingPassThrough(account) : null;
+  if (waiting) return <PaymentWaiting label={waiting.label} onClose={onClose} />;
   if (buy && !config?.ramp) {
     return (
       <Sheet title="Add money" onClose={onClose}>
@@ -103,7 +108,7 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
       </Sheet>
     );
   }
-  if (!config?.ramp) {
+  if (!config?.sell) {
     return (
       <Sheet title="Cash out" onClose={onClose}>
         <ol className="small stack" style={{ paddingLeft: 20, margin: 0 }}>
@@ -120,7 +125,7 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
       {buy && !opened && <div className="card stack"><strong>Already have crypto?</strong><span className="small">Transfer from an exchange or Algorand wallet.</span><button type="button" className="btn block" onClick={() => setReceiving(true)}>Transfer crypto I already own</button></div>}
       {opened ? (
         <>
-        <p className="small">{LOCAL_PILOT ? 'The Meld sandbox is open. Use its test details only; this preview does not move real funds.' : buy ? `Finish in the Meld window. Your deposit appears after Meld completes the purchase and delivers it.${asset === 'ALGO' ? ' Keep this page open, or come back: the wallet sets itself up and converts it to dollars.' : ''}`
+        <p className="small">{LOCAL_PILOT ? 'The Meld sandbox is open. Use its test details only; this preview does not move real funds.' : buy ? `Finish in the Meld window. Your deposit appears after Meld completes the purchase and delivers it. Keep this page open, or come back: the wallet ${firstDeposit ? 'sets itself up and converts' : 'converts'} it to dollars.`
           : 'Finish in the Meld window. When it asks you to send the USDC, you’ll come back here to confirm.'}</p>
         {!buy && <button type="button" className="btn primary block" onClick={() => { location.hash = '/wallet'; location.reload(); }}>Check cash-out</button>}
         </>
@@ -128,7 +133,8 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
         <>
           <Field label={buy ? 'Amount ($)' : 'Amount to cash out ($)'}><input type="text" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></Field>
           <Field label="US state" hint="Enter your two-letter state abbreviation, for example CA. Availability depends on your location."><input type="text" value={subdivision} maxLength={2} autoComplete="address-level1" onChange={(e) => setSubdivision(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} /></Field>
-          {asset === 'ALGO' && <p className="small">This first deposit also sets up your wallet automatically. A small reserve stays for setup and future network fees.</p>}
+          {firstDeposit && <p className="small">This first deposit also sets up your wallet automatically. A small reserve stays for setup and future network fees.</p>}
+          {buy && !firstDeposit && <p className="small">Your deposit arrives as ALGO and the wallet converts it to dollars.</p>}
           <p className="small muted">{buy ? 'Meld connects you to a payment provider for card payments and identity checks. The provider shows its fees before you pay. Fairground never sees your card details or takes a fee.'
             : 'Meld connects you to a provider for your bank payout and identity checks. The provider shows its fees before you confirm. Fairground never sees your bank details or takes a fee.'}</p>
           {LOCAL_PILOT && <p className="small warn">Test checkout only. Use sandbox payment details; real transfers are disabled in this preview.</p>}

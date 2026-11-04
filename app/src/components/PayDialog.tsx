@@ -1,4 +1,7 @@
-/** Direct payment from Fairground or another Algorand wallet, independent of the card/bank provider. */
+/**
+ * Direct payment from Fairground or another Algorand wallet. Without a balance, it pays by card or with ALGO from an
+ * exchange, with nothing left in the wallet afterwards (PassThroughPay).
+ */
 import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { algorandUsdc } from '@core/rails/algorand.ts';
@@ -6,9 +9,10 @@ import { transferProblem, type PaymentRequest, type Transfer } from '@core/rails
 import { formatUsd } from '@core/pricing.ts';
 import { useApp } from '../context.ts';
 import { balance as shown, nowSeconds, usd } from '../lib/format.ts';
-import { useWallet } from '../lib/wallet.ts';
+import { pendingPassThrough, useWallet } from '../lib/wallet.ts';
 import { FirstDeposit, RampSheet, SettleStatus } from '../screens/Wallet.tsx';
 import { CryptoFundingSheet } from './CryptoFunding.tsx';
+import { PassThroughPay } from './PassThroughPay.tsx';
 import { Field, Sheet } from './ui.tsx';
 
 interface Props {
@@ -17,6 +21,8 @@ interface Props {
   request: PaymentRequest;
   onPaid: (transfer: Transfer) => void;
   onClose: () => void;
+  /** Open on paying from another Algorand wallet. */
+  external?: boolean;
 }
 
 export function PayDialog(props: Props) {
@@ -24,15 +30,17 @@ export function PayDialog(props: Props) {
   return <Payment key={`${props.request.to}:${props.request.memo}:${props.request.amount}`} {...props} />;
 }
 
-function Payment({ title, description, request, onPaid, onClose }: Props) {
+function Payment({ title, description, request, onPaid, onClose, external: startExternal }: Props) {
   const { account, toast } = useApp();
   const wallet = useWallet(account);
   const link = algorandUsdc.paymentLink(request);
   const [qr, setQr] = useState('');
   const [busy, setBusy] = useState(false);
-  const [external, setExternal] = useState(false);
+  const [external, setExternal] = useState(startExternal ?? false);
   const [adding, setAdding] = useState(false);
   const [funding, setFunding] = useState(false);
+  // Reopening a payment that's already on its way picks it up where it was.
+  const [passing, setPassing] = useState(() => pendingPassThrough(account)?.requests.some((r) => r.to === request.to && r.memo === request.memo) ?? false);
   const [txid, setTxid] = useState('');
   const [problem, setProblem] = useState('');
   const [since] = useState(nowSeconds);
@@ -46,6 +54,7 @@ function Payment({ title, description, request, onPaid, onClose }: Props) {
   };
   const balance = wallet.state?.usdc ?? 0n;
   const canPay = !!wallet.state?.active && balance >= request.amount && request.to !== wallet.address;
+  const noBalance = !!wallet.state && !wallet.state.active && request.to !== wallet.address;
   // Orders/deals have unique notes. Fan support and donation notes are shared, so require a specific transaction
   // for an external payment rather than automatically claiming some other donor's recent transfer.
   const uniqueNote = /^fairground:(order|deal):/.test(request.memo);
@@ -103,6 +112,7 @@ function Payment({ title, description, request, onPaid, onClose }: Props) {
     catch { toast('Select the value and copy it.'); }
   };
 
+  if (passing) return <PassThroughPay title={title} requests={[request]} onPaid={(t) => finish(t[0])} onOtherWallet={() => (setPassing(false), setExternal(true))} onClose={() => setPassing(false)} />;
   if (funding) return <CryptoFundingSheet onClose={() => setFunding(false)} />;
   if (adding) return <RampSheet side="BUY" initial={formatUsd(request.amount - balance + 1_000_000n)} onClose={() => setAdding(false)} />;
   return (
@@ -116,7 +126,11 @@ function Payment({ title, description, request, onPaid, onClose }: Props) {
         <button type="button" className="btn primary block" disabled={busy} onClick={payNow}>{busy ? 'Paying…' : `Pay ${usd(request.amount)} from my wallet`}</button>
         <p className="tiny muted center">Wallet balance {shown(balance)}, {shown(balance - request.amount)} after.</p>
       </>}
-      <button type="button" className={`btn ${!canPay && !external ? 'primary' : 'ghost'} block`} onClick={() => setExternal(!external)}>
+      {!external && noBalance && <>
+        <button type="button" className="btn primary block" onClick={() => setPassing(true)}>Pay {usd(request.amount)} without a balance</button>
+        <p className="tiny muted center">By card, or with ALGO from an exchange. Nothing stays in your wallet, so there’s no wallet to set up.</p>
+      </>}
+      <button type="button" className={`btn ${!canPay && !external && !noBalance ? 'primary' : 'ghost'} block`} onClick={() => setExternal(!external)}>
         {external ? 'Use my Fairground wallet' : 'Pay with another Algorand wallet'}
       </button>
       {external ? <>
@@ -144,7 +158,9 @@ function Payment({ title, description, request, onPaid, onClose }: Props) {
           <button type="button" className="btn primary" onClick={() => setFunding(true)}>Transfer crypto I already own</button>
           <button type="button" className="btn" onClick={() => setAdding(true)}>Add money</button>
         </div>}
-        <FirstDeposit compact active={wallet.state?.active} />
+        {noBalance
+          ? <details className="small"><summary>Pay often? Keep a balance instead</summary><FirstDeposit compact active={false} /></details>
+          : <FirstDeposit compact active={wallet.state?.active} />}
         {!wallet.state && <p className="small muted">Checking your Fairground wallet… You can pay with another wallet right away.</p>}
         <SettleStatus />
       </>}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LOCAL_PILOT } from './lib/pilot.ts';
 import { Onboarding } from './components/Onboarding.tsx';
+import { PendingPayment } from './components/PassThroughPay.tsx';
 import { Aside, Sidebar } from './components/Shell.tsx';
 import { Icon } from './components/ui.tsx';
 import { AppContext, type AppState } from './context.ts';
@@ -153,6 +154,7 @@ export function App() {
       <Sidebar path={path} />
       <div className="app">
         {LOCAL_PILOT && <div role="status" style={{ padding: '10px 16px', background: '#fff3bf', color: '#533f00' }}>Local staging preview · $25 demo balance · Real transfers disabled</div>}
+        <PendingPayment />
         <main>{screen}</main>
         <div className="tabbar">
           <nav aria-label="Main">

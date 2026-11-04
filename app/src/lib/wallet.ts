@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { DEFAULT_GATEWAY } from '@core/defaults.ts';
 import { convertibleAlgo, walletAddress, walletState, type WalletState } from '@core/walletkey.ts';
 import type { Account } from './account.ts';
-import { load, save } from './storage.ts';
+import { load, remove, save } from './storage.ts';
 import { LOCAL_PILOT } from './pilot.ts';
 
 export const gatewayUrl = (): string => LOCAL_PILOT ? `${location.origin}/fairground` : load<string>('gateway', DEFAULT_GATEWAY);
@@ -18,8 +18,10 @@ export function myWalletAddress(account: Account): string {
 }
 
 export interface WalletConfig {
-  /** Whether the gateway has configured Meld routes. */
+  /** Whether the gateway has configured Meld routes: card purchases, at least. */
   ramp: boolean;
+  /** Whether cash-outs are configured too. */
+  sell?: boolean;
   provider?: 'meld';
   environment?: 'sandbox' | 'production';
 }
@@ -31,7 +33,8 @@ export function walletConfig(refresh = false): Promise<WalletConfig> {
     .then(async (r) => {
       if (!r.ok) return { ramp: false };
       const value = await r.json();
-      return { ramp: value.ramp === true && value.provider === 'meld', provider: value.provider, environment: value.environment };
+      const ramp = value.ramp === true && value.provider === 'meld';
+      return { ramp, sell: ramp && value.sell === true, provider: value.provider, environment: value.environment };
     })
     .catch(() => ({ ramp: false })));
 }
@@ -88,7 +91,8 @@ export function useSettle(account: Account, state: WalletState | undefined): { s
   const [status, setStatus] = useState<'idle' | 'working' | 'error'>('idle');
   const [error, setError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
-  const due = !LOCAL_PILOT && !!state && ((!state.active && state.algo >= state.minimum + 101_000n) || convertibleAlgo(state) > 0n);
+  // ALGO bought to pay without a balance belongs to that payment (PassThroughPay), not to a new balance.
+  const due = !LOCAL_PILOT && !!state && !pendingPassThrough(account) && ((!state.active && state.algo >= state.minimum + 101_000n) || convertibleAlgo(state) > 0n);
   useEffect(() => {
     if (!due || settling.has(account.pubkey)) return;
     settling.add(account.pubkey);
@@ -122,4 +126,27 @@ export function rememberRamp(account: Account, session: PendingRamp): void {
 }
 export function forgetRamp(account: Account, id: string): void {
   save(`meld-sessions-${account.pubkey}`, pendingRamps(account).filter((s) => s.id !== id));
+}
+
+/** A payment made without a balance, saved before checkout so it finishes after a reload or in another tab. */
+export interface PendingPassThrough {
+  /** Who it's for, to show while it's pending. */
+  label: string;
+  requests: { to: string; amount: string; memo: string }[];
+  /** Micro-ALGO to wait for before starting. */
+  need: string;
+  /** Donations pay what arrived if prices moved. */
+  flexible?: boolean;
+  /** How the ALGO is coming, for what to show while waiting. */
+  via: 'card' | 'transfer';
+  /** Set once this payment has set the wallet up to hold USDC: everything in it is then this payment's. */
+  ownsHolding?: boolean;
+  created: number;
+}
+const passKey = (account: Account) => `pass-through-${account.pubkey}`;
+export const pendingPassThrough = (account: Account): PendingPassThrough | null => load<PendingPassThrough | null>(passKey(account), null);
+export function savePassThrough(account: Account, pending: PendingPassThrough | null): void {
+  if (pending) save(passKey(account), pending);
+  else remove(passKey(account));
+  walletChanged();
 }
