@@ -78,7 +78,8 @@ try {
   await alice.page.getByRole('button', { name: /^Buy · \$12\.50/ }).click();
   await alice.page.getByLabel(/Details for the seller/).fill('Pickup at 6pm');
   await alice.page.getByRole('button', { name: /Send order and pay \$12\.50/ }).click();
-  await alice.page.getByRole('link', { name: 'Open another wallet app' }).waitFor();
+  await alice.page.getByRole('button', { name: 'Pay with another Algorand wallet', exact: true }).click();
+  await alice.page.getByRole('link', { name: 'Open payment in my wallet' }).waitFor();
   assert.ok(relay.events.some((e) => e.kind === 1059 && e.tags.some((t) => t[0] === 'p' && t[1] === relay.shop)), 'gift-wrapped to the seller');
   assert.ok(!relay.events.some((e) => e.kind === 1059 && e.content.includes('Pickup at 6pm')), 'the relay sees only ciphertext');
   await alice.page.keyboard.press('Escape');
@@ -100,7 +101,8 @@ try {
   await alice.page.getByText(/Offer sent/).waitFor();
   await bob.page.goto(`${url}#/messages/${alice.pubkey}`);
   await bob.page.getByRole('button', { name: /Accept and pay \$40\.00/ }).click({ timeout: 15000 });
-  await bob.page.getByRole('link', { name: 'Open another wallet app' }).waitFor();
+  await bob.page.getByRole('button', { name: 'Pay with another Algorand wallet', exact: true }).click();
+  await bob.page.getByRole('link', { name: 'Open payment in my wallet' }).waitFor();
   await bob.page.keyboard.press('Escape');
 
   step('Alice sees Bob’s order in Selling, accepts it, and Bob sees the update');

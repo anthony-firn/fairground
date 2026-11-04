@@ -52,6 +52,8 @@ async function standIns(ctx: BrowserContext) {
     const body = blob?.body ?? (await readFile(path.join(root, 'media', name)).catch(() => undefined));
     await (body ? route.fulfill({ body, headers: CORS, contentType: blob?.type ?? 'application/octet-stream' }) : route.fulfill({ status: 404 }));
   });
+  // The Algorand node: every wallet here is new and empty.
+  await ctx.route('https://mainnet-api.4160.nodely.dev/**', (route) => route.fulfill({ status: 404, headers: CORS, contentType: 'application/json', body: '{}' }));
   // The Algorand indexer: every account can receive USDC, and no payment has arrived.
   await ctx.route('https://mainnet-idx.4160.nodely.dev/**', (route) => route.fulfill({
     headers: CORS, contentType: 'application/json',
@@ -222,7 +224,9 @@ try {
   await go(listener.page, '/you');
   await listener.page.getByRole('button', { name: 'Support Fairground' }).click();
   await listener.page.getByRole('button', { name: /Donate \$5\.00/ }).click();
-  const link = await listener.page.getByRole('link', { name: 'Open another wallet app' }).getAttribute('href');
+  // Without a balance it offers card or exchange first; a USDC wallet elsewhere is one tap away.
+  await listener.page.getByRole('button', { name: 'Pay from another Algorand wallet', exact: true }).click();
+  const link = await listener.page.getByRole('link', { name: 'Open payment in my wallet' }).getAttribute('href');
   assert.ok(link?.startsWith(`algorand://${DEVELOPMENT_ADDRESS}?amount=5000000&asset=31566704`), link ?? '');
   assert.ok(link?.includes('xnote=fairground%3Adevelopment'));
   await shot(listener.page, 'donate');
