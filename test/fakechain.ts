@@ -1,7 +1,7 @@
 /**
  * A stand-in for Algorand mainnet's algod and indexer, for tests: it checks signatures, fees (pooled across a group),
- * minimum balances and USDC opt-ins the way the network does, and answers the queries the wallet, the starter and the
- * payment checks make. Nothing here touches a real network.
+ * minimum balances, USDC opt-ins and account closing the way the network does, and answers the queries the wallet, the
+ * starter and the payment checks make. Nothing here touches a real network.
  */
 import algosdk from 'algosdk';
 import { Decoder } from 'algorand-msgpack';
@@ -78,6 +78,12 @@ export function createFakeChain(origins: { algod: string; indexer: string } = { 
         const to = txn.payment!.receiver.toString();
         from.algo -= txn.payment!.amount;
         get(to).algo += txn.payment!.amount;
+        const close = txn.payment!.closeRemainderTo?.toString();
+        if (close) {
+          if (from.usdc !== null) throw new Error('cannot close an account that still holds an asset');
+          get(close).algo += from.algo;
+          from.algo = 0n;
+        }
         recorded.push({ id: txn.txID(), type: 'pay', sender, receiver: to, amount: txn.payment!.amount, note: txn.note, round, time: Math.floor(Date.now() / 1000) });
       } else if (txn.type === 'axfer') {
         const x = txn.assetTransfer!;
@@ -90,6 +96,12 @@ export function createFakeChain(origins: { algod: string; indexer: string } = { 
           if (get(to).usdc === null) throw new Error('receiver not opted in to USDC');
           from.usdc -= x.amount;
           get(to).usdc! += x.amount;
+          const close = x.closeRemainderTo?.toString();
+          if (close) {
+            if (get(close).usdc === null) throw new Error('close-to not opted in to USDC');
+            get(close).usdc! += from.usdc;
+            from.usdc = null;
+          }
         }
         recorded.push({ id: txn.txID(), type: 'axfer', sender, receiver: to, amount: x.amount, asset: USDC_ASSET_ID, note: txn.note, round, time: Math.floor(Date.now() / 1000) });
       } else if (txn.type === 'appl' && txn.applicationCall!.appIndex === ROUTER_APP) {

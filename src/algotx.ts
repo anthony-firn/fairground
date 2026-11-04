@@ -1,6 +1,6 @@
 /**
- * The two Algorand transactions Fairground makes (an ALGO payment and an asset transfer), encoded exactly as the
- * network expects: canonical MessagePack with sorted keys and empty values left out. Signing, transaction ids and group
+ * The two Algorand transactions Fairground makes (an ALGO payment and an asset transfer, either of which can also close
+ * what it pays from), encoded exactly as the network expects: canonical MessagePack with sorted keys and empty values left out. Signing, transaction ids and group
  * ids follow from that. It replaces the full Algorand SDK, which is too large to start inside an edge function's
  * time budget; tests check every byte against the SDK.
  */
@@ -86,11 +86,13 @@ const header = (sender: string, p: TxnParams, note?: Uint8Array): Txn => ({
   snd: addressKey(sender), fee: p.fee, fv: p.firstValid, lv: p.lastValid, gen: p.genesisID, gh: p.genesisHash, note,
 });
 
-export const payTxn = (sender: string, receiver: string, amount: bigint, p: TxnParams, note?: Uint8Array): Txn =>
-  ({ ...header(sender, p, note), type: 'pay', rcv: addressKey(receiver), amt: amount });
+/** With `close`, everything left in the account goes to that address afterwards and the account closes. */
+export const payTxn = (sender: string, receiver: string, amount: bigint, p: TxnParams, note?: Uint8Array, close?: string): Txn =>
+  ({ ...header(sender, p, note), type: 'pay', rcv: addressKey(receiver), amt: amount, close: close === undefined ? undefined : addressKey(close) });
 
-export const assetTxn = (sender: string, receiver: string, assetId: number, amount: bigint, p: TxnParams, note?: Uint8Array): Txn =>
-  ({ ...header(sender, p, note), type: 'axfer', arcv: addressKey(receiver), xaid: BigInt(assetId), aamt: amount });
+/** With `close`, the rest of the holding goes to that address afterwards and the holding is removed. */
+export const assetTxn = (sender: string, receiver: string, assetId: number, amount: bigint, p: TxnParams, note?: Uint8Array, close?: string): Txn =>
+  ({ ...header(sender, p, note), type: 'axfer', arcv: addressKey(receiver), xaid: BigInt(assetId), aamt: amount, aclose: close === undefined ? undefined : addressKey(close) });
 
 export const encodeTxn = (t: Txn): Uint8Array => encode(t);
 const tag = (s: string) => new TextEncoder().encode(s);

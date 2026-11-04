@@ -25,6 +25,17 @@ test('encodes payments and USDC transfers exactly as the Algorand SDK does', () 
   }
 });
 
+test('closing an account or an asset holding encodes as the SDK does', () => {
+  const cases: [ReturnType<typeof payTxn>, algosdk.Transaction][] = [
+    [payTxn(A, B, 0n, params, undefined, B), algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: A, receiver: B, amount: 0, closeRemainderTo: B, suggestedParams: sdkParams })],
+    [assetTxn(A, B, USDC_ASSET_ID, 5_000_000n, params, memo, B), algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({ sender: A, receiver: B, amount: 5_000_000n, assetIndex: USDC_ASSET_ID, note: memo, closeRemainderTo: B, suggestedParams: sdkParams })],
+  ];
+  for (const [ours, sdk] of cases) {
+    assert.equal(bytes(encodeTxn(ours)), bytes(algosdk.encodeUnsignedTransaction(sdk)));
+    assert.equal(txid(ours), sdk.txID());
+  }
+});
+
 test('group ids and signatures match the SDK', () => {
   const ours = [payTxn(A, B, 250_000n, { ...params, fee: 2000n }), assetTxn(B, B, USDC_ASSET_ID, 0n, { ...params, fee: 0n })];
   const sdk = [
