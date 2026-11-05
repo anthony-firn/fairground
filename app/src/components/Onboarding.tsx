@@ -26,6 +26,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         </div>
         <button type="button" className="btn primary block" onClick={start}>{picked.length ? 'Start' : 'Skip and start'}</button>
         <button type="button" className="btn ghost block" onClick={() => setSigningIn(true)}>I already have an account</button>
+        <a className="btn ghost block" href="https://www.evolvetech.dev/wallet-setup/" target="_blank" rel="noopener noreferrer">Need help setting up a wallet? ↗</a>
       </div>
       {signingIn && <SignInSheet onClose={() => setSigningIn(false)} />}
     </div>

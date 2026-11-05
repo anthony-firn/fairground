@@ -30,6 +30,7 @@ export function CryptoFundingSheet({ onClose }: { onClose: () => void }) {
   if (waiting) return <PaymentWaiting label={waiting.label} onClose={onClose} />;
   return (
     <Sheet title="Transfer crypto to Fairground" onClose={onClose}>
+      <a className="small" href="https://www.evolvetech.dev/wallet-setup/" target="_blank" rel="noopener noreferrer">Open the wallet setup walkthrough ↗</a>
       <p className="small">Already have crypto? Send it from an exchange or another wallet. This works independently of card checkout.</p>
       {LOCAL_PILOT && <p className="small warn">Preview address only. Do not send real funds to this test account.</p>}
       {!wallet.state && <p className="small muted">Checking whether your wallet can receive USDC… ALGO can be received first.</p>}

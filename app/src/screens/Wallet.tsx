@@ -11,6 +11,7 @@ import { algorandUsdc, isAlgorandAddress } from '@core/rails/algorand.ts';
 import type { Transfer } from '@core/rails/rail.ts';
 import { formatUsd, parseUsd } from '@core/pricing.ts';
 import { feesLeft } from '@core/walletkey.ts';
+import { WalletSetupLink } from '../components/WalletSetupLink.tsx';
 import { CryptoFundingSheet } from '../components/CryptoFunding.tsx';
 import { PaymentWaiting } from '../components/PassThroughPay.tsx';
 import { Field, Sheet, TopBar } from '../components/ui.tsx';
@@ -246,6 +247,7 @@ export function WalletScreen(_props: { query: URLSearchParams }) {
     <>
       <TopBar title="Wallet" back={() => navigate('/you')} />
       <div className="page">
+        <WalletSetupLink />
         <div className="card stack center wallet-balance">
           <span className="small muted">Balance</span>
           <strong style={{ fontSize: 40 }}>{state ? balance(state.usdc) : '…'}</strong>
