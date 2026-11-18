@@ -109,3 +109,11 @@ test('a pending conversion cannot be replaced and an expired one needs a synchro
  synchronized=true;const result=await resumeWalletConversion(t.keys.address,t.store,{algod:ALGOD,indexer:'https://indexer.test',fetch:f});
  assert.equal(result.phase,'expired');assert.equal(t.posts(),0);
 });
+
+test('a router cannot obtain a signature for a far-future conversion',async()=>{
+ const t=await conversionFixture(),txns=t.plan.raw.map(decodeTxn);
+ for(const txn of txns){txn.fv=5000n;txn.lv=5020n;}assignGroup(txns);
+ const plan={...t.plan,raw:txns.map(encodeTxn)};
+ await assert.rejects(executeWalletConversion(t.keys,plan,t.store,{algod:ALGOD,fetch:t.f,now:()=>1001}),/current mainnet round/);
+ assert.equal(t.saved(),null);assert.equal(t.posts(),0);
+});
