@@ -36,7 +36,7 @@ const errors: string[] = [];
 const step = (name: string) => console.log(`- ${name}`);
 
 const chain = createFakeChain({ algod: DEFAULT_ALGOD, indexer: DEFAULT_INDEXER });
-const router = createFakeRouter(0.1, ROUTER_API);
+const router = createFakeRouter(0.1, ROUTER_API, chain.currentRound);
 chain.fund(DEVELOPMENT_ADDRESS!, 200_000n, 0n);
 const meldDeposit = algosdk.generateAccount().addr.toString();
 chain.fund(meldDeposit, 200_000n, 0n);
@@ -80,7 +80,7 @@ async function person(): Promise<{ page: Page; ctx: BrowserContext; pubkey: stri
   return { page, ctx, pubkey };
 }
 const go = (page: Page, hash: string) => page.evaluate((h) => (location.hash = h), hash);
-const shot = async (page: Page, name: string) => shots && page.screenshot({ path: path.join(shots, `${name}.png`) });
+const shot = async (page: Page, name: string) => shots && page.screenshot({ path: path.join(shots, `${name}.png`), animations: 'disabled' });
 const usdcOf = (addr: string) => chain.accounts.get(addr)?.usdc ?? null;
 
 try {
@@ -114,6 +114,33 @@ try {
   await funding.getByText('Asset: ALGO', { exact: true }).waitFor();
   await funding.getByRole('button', { name: 'USDC', exact: true }).click();
   await funding.getByRole('button', { name: 'Close', exact: true }).click();
+
+  step('small deposits can be reviewed and interrupted conversions resume without a duplicate swap');
+  const beforeSmall=usdcOf(cryptoAddress)!;
+  chain.fund(cryptoAddress,550_000n);
+  const convert=crypto.page.getByRole('button',{name:'Convert ALGO to USDC',exact:true});
+  await convert.waitFor({timeout:20000});await convert.click();
+  const conversion=crypto.page.getByRole('dialog',{name:'Convert ALGO to USDC',exact:true});
+  await conversion.getByText(/Prepared network fees: 0.008 ALGO/).waitFor();
+  await shot(crypto.page,'stable-conversion-review');
+  let conversionPosts=0;
+  const conversionEndpoint=`${DEFAULT_ALGOD}/v2/transactions`;
+  await crypto.ctx.route(conversionEndpoint,async route=>{
+    if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers:{'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'*','Access-Control-Allow-Methods':'*'}});return;}
+    conversionPosts++;
+    const r=route.request();await chain.fetch(r.url(),{method:'POST',body:new Uint8Array(r.postDataBuffer()!)});
+    await route.abort('failed');
+  });
+  await conversion.getByRole('button',{name:'Confirm conversion',exact:true}).click();
+  await conversion.getByText(/saved and may be pending/).waitFor();
+  await crypto.page.reload();await go(crypto.page,'/wallet');
+  await crypto.page.getByRole('button',{name:'Resume conversion',exact:true}).click();
+  await crypto.page.waitForFunction(address=>JSON.parse(localStorage.getItem('fairground.wallet-conversion-'+address)??'null')?.phase==='confirmed',cryptoAddress);
+  assert.equal(conversionPosts,1,'reload resumes the confirmed group instead of submitting a second trade');
+  assert.ok(usdcOf(cryptoAddress)!>beforeSmall);assert.ok(chain.accounts.get(cryptoAddress)!.algo>=500_000n);
+  await crypto.page.getByText('Wallet signing: Ed25519 (standard signing)',{exact:true}).waitFor();
+  await shot(crypto.page,'stable-conversion-confirmed');
+  await crypto.ctx.unroute(conversionEndpoint);
 
   step('a new wallet asks for a first deposit; nobody else funds it');
   const configUrl = `${DEFAULT_GATEWAY}/wallet/config`;

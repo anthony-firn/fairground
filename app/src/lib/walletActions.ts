@@ -11,6 +11,22 @@ import type { Account } from './account.ts';
 import { gatewayUrl, walletChanged, pendingRamp, rememberRamp, forgetRamp } from './wallet.ts';
 import { LOCAL_PILOT, requireRealPayments } from './pilot.ts';
 import { parseUsd } from '@core/pricing.ts';
+import {prepareWalletConversion,walletSignerProblem,type WalletConversion} from '@core/walletConversion.ts';
+import {executeWalletConversion,resumeWalletConversion} from '@core/conversionSession.ts';
+import {conversionLock,conversionStore,readConversion} from './stableConversion.ts';
+
+export async function previewStableConversion(account:Account):Promise<WalletConversion>{
+  requireRealPayments();
+  return prepareWalletConversion(await walletState(walletKeys(account.nostrKey).address));
+}
+export async function confirmStableConversion(account:Account,plan:WalletConversion){
+  requireRealPayments();const keys=walletKeys(account.nostrKey);
+  return conversionLock(keys.address,async()=>{const result=await executeWalletConversion(keys,plan,conversionStore(keys.address));walletChanged();return result;});
+}
+export async function resumeStableConversion(account:Account){
+  requireRealPayments();const address=walletKeys(account.nostrKey).address;
+  return conversionLock(address,async()=>{const result=await resumeWalletConversion(address,conversionStore(address));walletChanged();return result;});
+}
 
 async function call<T>(account: Account, path: string, method: 'GET' | 'POST', body?: unknown): Promise<T> {
   const url = `${gatewayUrl()}${path}`;
@@ -40,7 +56,14 @@ async function swap(account: Account, from: number, to: number, amount: bigint):
 export async function settleWallet(account: Account): Promise<'waiting' | 'converted' | 'idle'> {
   requireRealPayments();
   const keys = walletKeys(account.nostrKey);
+  return conversionLock(keys.address,async()=>{
+  const pending=readConversion(keys.address);
+  if(pending&&pending.phase!=='confirmed'&&pending.phase!=='expired'){
+    const result=await resumeWalletConversion(keys.address,conversionStore(keys.address));walletChanged();
+    return result.phase==='confirmed'?'converted':'idle';
+  }
   let state = await walletState(keys.address);
+  const signer=walletSignerProblem(state);if(signer)throw Error(signer);
   if (!state.active) {
     if (state.algo < state.minimum + 101_000n) return 'waiting';
     await confirmed(await submit([sign(usdcOptIn(keys.address, await suggestedParams()), keys.seed)]));
@@ -49,9 +72,11 @@ export async function settleWallet(account: Account): Promise<'waiting' | 'conve
   }
   const spare = convertibleAlgo(state);
   if (!spare) return 'idle';
-  await swap(account, 0, USDC_ASSET_ID, spare);
+  const plan=await prepareWalletConversion(state);
+  await executeWalletConversion(keys,plan,conversionStore(keys.address));
   walletChanged();
   return 'converted';
+  });
 }
 
 /** Pays from the wallet: the same USDC transfer and memo a payment link would make, signed on this device. */
@@ -60,6 +85,7 @@ export async function payFromWallet(account: Account, request: PaymentRequest): 
   const keys = walletKeys(account.nostrKey);
   // Keep a few cents of ALGO for network fees, bought with the wallet's own dollars, so payments never stall.
   const state = await walletState(keys.address);
+  const signer=walletSignerProblem(state);if(signer)throw Error(signer);
   if (needsFeeTopUp(state) && state.usdc - request.amount >= 200_000n) await swap(account, USDC_ASSET_ID, 0, 100_000n).catch(() => undefined);
   const txid = await submit([sign(usdcPayment(keys.address, request, await suggestedParams()), keys.seed)]);
   await confirmed(txid);

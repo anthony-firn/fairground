@@ -71,9 +71,8 @@ donation), so the app finds it on the public chain and anyone can verify every f
 by the US CPI-U when paid, never below nominal. Index values arrive as signed attestations, published monthly from the
 BLS by `tools/publish-index.ts`; each client chooses which publishers it trusts and how many must agree.
 
-**Contracts are quantum-resistant.** Contract events carry an ML-DSA-65 (FIPS 204) signature alongside Nostr's Schnorr
-signature, so a future quantum computer that can forge Schnorr signatures still can't forge a deal. Creators receive
-into Algorand accounts that can sign with Falcon-1024, live on mainnet since August 2026.
+**Contracts carry hybrid post-quantum signatures.** Contract events carry an ML-DSA-65 (FIPS 204) signature alongside Nostr's Schnorr
+signature. With an authenticated post-quantum key, forging Schnorr alone cannot authorize a deal; first-contact key-history trust remains a separate dependency. Payments settle as native USDC on Algorand. Falcon-1024 accounts are available in compatible external wallets; the built-in wallet still uses Ed25519.
 
 **Audience surveys replace tracking.** Fairground is anonymous by default. A creator who wants to show sponsors their
 audience asks in plain language, with standard questions (age range, region). Each answer goes out separately, at a
@@ -215,6 +214,8 @@ the account's vault on relays: keys, settings, AI interests, subscriptions, payo
   get past it. Keeping to Fairground accounts does most of the work against spam.
 - Fairground doesn't give legal or tax advice. Creators and advertisers remain responsible for their disclosures and
   taxes.
+
+See [stablecoin balances and quantum security](docs/stablecoin-security.md) for the wallet signer, issuer controls, key-binding trust, conversion safeguards and remaining migration work.
 
 ## Development
 

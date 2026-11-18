@@ -141,7 +141,7 @@ export function createFakeChain(origins: { algod: string; indexer: string } = { 
         }
       }
       const pending = /^\/v2\/transactions\/pending\/([A-Z2-7]{52})$/.exec(path);
-      if (pending) return ok(txns.some((t) => t.id === pending[1]) ? { 'confirmed-round': round } : { 'pool-error': 'unknown transaction' });
+      if (pending) return txns.some((t) => t.id === pending[1]) ? ok({ 'confirmed-round': round }) : fail(404,'unknown transaction');
     }
     if (url.origin === origins.indexer) {
       const q = url.searchParams;
@@ -179,6 +179,7 @@ export function createFakeChain(origins: { algod: string; indexer: string } = { 
     fetch: fetchImpl,
     accounts,
     txns,
+    currentRound: () => round,
     /** Gives an account ALGO and, if `usdc` is set, a USDC holding. */
     fund(addr: string, algo: bigint, usdc?: bigint) {
       const a = account(addr);
@@ -189,7 +190,7 @@ export function createFakeChain(origins: { algod: string; indexer: string } = { 
 }
 
 /** A stand-in for Folks Router's API: one ALGO is worth `usdcPerAlgo` dollars. */
-export function createFakeRouter(usdcPerAlgo = 0.1, api = 'https://router.test/v2') {
+export function createFakeRouter(usdcPerAlgo = 0.1, api = 'https://router.test/v2', currentRound = () => 1000) {
   const router = algosdk.getApplicationAddress(ROUTER_APP).toString();
   const rate = BigInt(Math.round(usdcPerAlgo * 1e6));
   const fetchImpl: typeof fetch = async (input) => {
@@ -207,7 +208,8 @@ export function createFakeRouter(usdcPerAlgo = 0.1, api = 'https://router.test/v
       const p = JSON.parse(Buffer.from(q.get('txnPayload')!, 'base64').toString());
       const user = q.get('userAddress')!;
       const min = minReceive({ quote: BigInt(p.quote) }, Number(q.get('slippageBps')));
-      const sp = { flatFee: true, fee: 1000n, minFee: 1000n, firstValid: 1000n, lastValid: 2000n, genesisID: 'mainnet-v1.0', genesisHash: algosdk.base64ToBytes(MAINNET_GENESIS_HASH) };
+      const firstValid=BigInt(currentRound());
+      const sp = { flatFee: true, fee: 1000n, minFee: 1000n, firstValid, lastValid: firstValid+1000n, genesisID: 'mainnet-v1.0', genesisHash: algosdk.base64ToBytes(MAINNET_GENESIS_HASH) };
       const send = p.from === 0
         ? algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: user, receiver: router, amount: BigInt(p.amount), suggestedParams: sp })
         : algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({ sender: user, receiver: router, amount: BigInt(p.amount), assetIndex: p.from, suggestedParams: sp });
