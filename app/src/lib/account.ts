@@ -3,7 +3,8 @@
  * holds the Nostr secret key and the post-quantum seed; the key binding can always be made again from them.
  */
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js';
-import { decode, nsecEncode } from 'nostr-tools/nip19';
+import { nsecEncode } from 'nostr-tools/nip19';
+import {parseAccountBackup} from '@core/accountBackup.ts';
 import { generateSecretKey, getPublicKey, type Event } from 'nostr-tools/pure';
 import { createPqBinding, generatePqKeys, type PqKeys } from '@core/pq.ts';
 import { load, save } from './storage.ts';
@@ -45,11 +46,8 @@ export function backupCode(account: Account): string {
 
 /** Accepts a Fairground backup code, or a bare `nsec` from another Nostr app (which gets a new post-quantum key). */
 export function restoreAccount(code: string): Account {
-  const [prefix, nsec, seed] = code.trim().split(':');
-  const bech = prefix === 'fairground' ? nsec : prefix;
-  const decoded = decode(bech);
-  if (decoded.type !== 'nsec') throw new Error('That isn’t a backup code or an nsec key.');
-  const stored = create(decoded.data, seed && /^[0-9a-f]{64}$/.test(seed) ? hexToBytes(seed) : undefined);
+  const {nostrKey,pqSeed}=parseAccountBackup(code);
+  const stored = create(nostrKey,pqSeed);
   save('account', stored);
   return build(stored);
 }
