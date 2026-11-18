@@ -123,8 +123,8 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
       {buy && !opened && <div className="card stack"><strong>Already have crypto?</strong><span className="small">Transfer from an exchange or Algorand wallet.</span><button type="button" className="btn block" onClick={() => setReceiving(true)}>Transfer crypto I already own</button></div>}
       {opened ? (
         <>
-        <p className="small">{LOCAL_PILOT ? 'The Meld sandbox is open. Use its test details only; this preview does not move real funds.' : buy ? `Finish in the Meld window. Your deposit appears after Meld completes the purchase and delivers it.${asset === 'ALGO' ? ' Keep this page open, or come back: the wallet sets itself up and converts it to dollars.' : ''}`
-          : 'Finish in the Meld window. When it asks you to send the USDC, you’ll come back here to confirm.'}</p>
+        <p className="small">{LOCAL_PILOT ? 'The test checkout is open. Use its test details only; this preview does not move real funds.' : buy ? `Finish in the checkout window. Your deposit appears after the provider completes the purchase and delivers it.${asset === 'ALGO' ? ' Keep this page open, or come back: the wallet sets itself up and converts it to dollars.' : ''}`
+          : 'Finish in the checkout window. When it asks you to send the USDC, you’ll come back here to confirm.'}</p>
         {!buy && <button type="button" className="btn primary block" onClick={() => { location.hash = '/wallet'; location.reload(); }}>Check cash-out</button>}
         </>
       ) : (
@@ -132,10 +132,10 @@ export function RampSheet({ side, initial, onClose }: { side: 'BUY' | 'SELL'; in
           <Field label={buy ? 'Amount ($)' : 'Amount to cash out ($)'}><input type="text" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></Field>
           <Field label="US state" hint="Enter your two-letter state abbreviation, for example CA. Availability depends on your location."><input type="text" value={subdivision} maxLength={2} autoComplete="address-level1" onChange={(e) => setSubdivision(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} /></Field>
           {asset === 'ALGO' && <p className="small">This first deposit also sets up your wallet automatically. A small reserve stays for setup and future network fees.</p>}
-          <p className="small muted">{buy ? 'Meld connects you to a payment provider for card payments and identity checks. The provider shows its fees before you pay. Fairground never sees your card details or takes a fee.'
-            : 'Meld connects you to a provider for your bank payout and identity checks. The provider shows its fees before you confirm. Fairground never sees your bank details or takes a fee.'}</p>
+          <p className="small muted">{buy ? 'The checkout provider handles card payments and identity checks. The provider shows its fees before you pay. Fairground never sees your card details or takes a fee.'
+            : 'The checkout provider handles your bank payout and identity checks. The provider shows its fees before you confirm. Fairground never sees your bank details or takes a fee.'}</p>
           {LOCAL_PILOT && <p className="small warn">Test checkout only. Use sandbox payment details; real transfers are disabled in this preview.</p>}
-          <button type="button" className="btn primary block" disabled={starting || !state || !(Number(amount) > 0) || subdivision.length !== 2 || (!buy && Number(amount) > Number(state?.usdc ?? 0n) / 1_000_000)} onClick={open}>{starting ? 'Opening checkout…' : LOCAL_PILOT ? 'Open Meld sandbox' : 'Continue with Meld'}</button>
+          <button type="button" className="btn primary block" disabled={starting || !state || !(Number(amount) > 0) || subdivision.length !== 2 || (!buy && Number(amount) > Number(state?.usdc ?? 0n) / 1_000_000)} onClick={open}>{starting ? 'Opening checkout…' : LOCAL_PILOT ? 'Open test checkout' : 'Continue to checkout'}</button>
         </>
       )}
     </Sheet>
@@ -200,7 +200,7 @@ function CashOutReturn({ orderId, onClose }: { orderId: string; onClose: () => v
       {check && 'amount' in check && (
         <>
           <p>Send <strong>{usd(check.amount)}</strong> to the provider, and they’ll pay about <strong>{check.fiat}</strong> to your bank.</p>
-          <p className="tiny muted">Checked with Meld: this order is yours and waiting for this payment.</p>
+          <p className="tiny muted">Checked with the payment provider: this order is yours and waiting for this payment.</p>
           <button type="button" className="btn primary block" disabled={busy} onClick={async () => {
             setBusy(true);
             try {
