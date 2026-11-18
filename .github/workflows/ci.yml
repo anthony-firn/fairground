@@ -17,6 +17,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: rustup toolchain install 1.91.1 --profile minimal --target wasm32-unknown-unknown
+      - run: cargo +1.91.1 test --manifest-path crates/fund-policy/Cargo.toml --locked
+      - run: python3 tools/build-fund-policy.py
+      - run: git diff --exit-code -- src/generated/fundPolicyWasm.ts
+      - run: sh tools/install-proof-toolchain.sh
+      - run: python3 tools/check-fund-proofs.py
       - run: npm test
       - run: npm run typecheck
       - run: npm run app:build

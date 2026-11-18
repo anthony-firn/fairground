@@ -4,20 +4,18 @@ import {sha256} from '@noble/hashes/sha2.js';
 import {MAINNET_GENESIS_HASH, USDC_ASSET_ID} from './rails/algorand.ts';
 import {base64} from '@scure/base';
 import {MAX_SWAP_FEES, minReceive, prepareSwap, quoteSwap, swapProblem, type SwapQuote} from './swap.ts';
-import {RESERVE_MICROALGOS, type WalletState} from './walletkey.ts';
+import {type WalletState} from './walletkey.ts';
+import {policyReserve,policyLimit,policyBudget} from './fundPolicy.ts';
 
 export const CONVERSION_QUOTE_MS = 30_000;
-export const walletReserve = (state: Pick<WalletState,'minimum'>): bigint =>
-  state.minimum + 300_000n > RESERVE_MICROALGOS ? state.minimum + 300_000n : RESERVE_MICROALGOS;
+export const walletReserve = (state: Pick<WalletState,'minimum'>): bigint => policyReserve(state.minimum);
 
 export function walletSignerProblem(state: WalletState): string | undefined {
   if (state.authAddress && state.authAddress !== state.address) return 'This account uses an external signing authority. Use its controlling wallet to spend; receiving still works.';
 }
 
 export function convertibleOnRequest(state: WalletState): bigint {
-  if (!state.active || walletSignerProblem(state)) return 0n;
-  const spare = state.algo - walletReserve(state) - MAX_SWAP_FEES;
-  return spare > 0n ? spare : 0n;
+  return policyLimit(state.algo,state.minimum,MAX_SWAP_FEES,state.active,!walletSignerProblem(state));
 }
 
 export interface WalletConversion {
@@ -46,7 +44,7 @@ export function conversionProblem(plan: WalletConversion, state: WalletState, no
   if (!(expectedGroup instanceof Uint8Array) || !same(txns[0].grp,expectedGroup)) return 'The conversion group does not match its transactions.';
   const fees=txns.reduce((n,t)=>n+(typeof t.fee==='bigint'?t.fee:0n),0n);
   if (fees!==plan.fees || fees>MAX_SWAP_FEES || plan.reserve!==walletReserve(state)) return 'The conversion fees or reserve changed. Get a new quote.';
-  if (state.algo-plan.quote.amount-fees<plan.reserve) return 'The balance changed; this conversion would spend the ALGO reserve.';
+  if (!policyBudget(state.algo,state.minimum,plan.quote.amount,fees,MAX_SWAP_FEES)) return 'The balance changed; this conversion would spend the ALGO reserve.';
 }
 
 export async function prepareWalletConversion(state: WalletState, fetchImpl: typeof fetch = (...args)=>fetch(...args), api?: string, now = Date.now()): Promise<WalletConversion> {

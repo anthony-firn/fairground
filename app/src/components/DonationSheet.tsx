@@ -174,8 +174,9 @@ export function DonationSheet({ amount, payment, onClose }: Props) {
     <Sheet title={amount ? 'Give a little back?' : 'Support Fairground'} onClose={onClose}>
       <p className="muted">Optional. Fairground takes nothing from payments. A small donation keeps it running: development builds the app,
         and relays (often run by your own audience) carry everyone’s posts.</p>
-      <p className="small">No balance needed: pay by card or with ALGO from an exchange, and it goes straight to them. You can also pay from an Algorand wallet holding USDC.</p>
+      <p className="small">You can pay directly from an Algorand wallet holding USDC, or transfer crypto from an exchange into Fairground first. Card and bank checkout are not available here yet.</p>
       <button type="button" className="btn block" onClick={() => setFunding(true)}>How to use crypto I already own</button>
+      <p className="tiny muted">Development support goes to Anthony Firn for this project. It is voluntary support, not an investment or a tax-deductible charitable contribution. Relay shares go to independent operators. Payments and their notes are public on Algorand, including when you hide the social receipt. Network fees apply; confirmed transfers cannot simply be reversed. <a href="https://www.evolvetech.dev/terms/" target="_blank" rel="noopener noreferrer">Support details and payment help</a></p>
       {nobody ? (
         <p className="card small">Donations open as soon as Fairground’s development fund is ready to receive. Thank you for thinking of it.</p>
       ) : (
@@ -214,7 +215,7 @@ export function DonationSheet({ amount, payment, onClose }: Props) {
               </label>
             ))}
           </div>
-          <label className="switch"><span>Show this donation publicly</span><input type="checkbox" checked={makePublic} onChange={(e) => setMakePublic(e.target.checked)} /></label>
+          <label className="switch"><span>Publish a social receipt (the payment remains public)</span><input type="checkbox" checked={makePublic} onChange={(e) => setMakePublic(e.target.checked)} /></label>
           <button type="button" className="btn primary block" disabled={!payments || totalMicros <= 0n} onClick={start}>
             Donate {usd(totalMicros)}{payments > 1 ? ` · ${payments} payments` : ''}
           </button>
