@@ -162,7 +162,7 @@ try {
   await fan.page.getByText('This first deposit also sets up your wallet').waitFor();
   const popup = fan.page.waitForEvent('popup');
   await fan.page.getByRole('textbox', { name: 'US state', exact: true }).fill('CA');
-  await fan.page.getByRole('button', { name: 'Continue with Meld' }).click();
+  await fan.page.getByRole('button', { name: 'Continue to checkout' }).click();
   const widget = await popup;
   await widget.waitForURL(/meldcrypto\.com\/\?token=session-/);
   await widget.close();
@@ -183,7 +183,7 @@ try {
   await fan.page.getByRole('button', { name: 'Add money' }).click();
   const popup2 = fan.page.waitForEvent('popup');
   await fan.page.getByRole('textbox', { name: 'US state', exact: true }).fill('CA');
-  await fan.page.getByRole('button', { name: 'Continue with Meld' }).click();
+  await fan.page.getByRole('button', { name: 'Continue to checkout' }).click();
   const widget2 = await popup2;
   await widget2.waitForURL(/token=session-/);
   await widget2.close();
@@ -197,7 +197,7 @@ try {
   await creator.page.getByRole('button', { name: 'Add money' }).click();
   const popup3 = creator.page.waitForEvent('popup');
   await creator.page.getByRole('textbox', { name: 'US state', exact: true }).fill('CA');
-  await creator.page.getByRole('button', { name: 'Continue with Meld' }).click();
+  await creator.page.getByRole('button', { name: 'Continue to checkout' }).click();
   const widget3 = await popup3;
   await widget3.waitForURL(/token=session-/);
   await widget3.close();
@@ -260,7 +260,7 @@ try {
   await creator.page.getByRole('textbox', { name: 'Amount to cash out ($)', exact: true }).fill('4');
   await creator.page.getByRole('textbox', { name: 'US state', exact: true }).fill('CA');
   const sellPopup = creator.page.waitForEvent('popup');
-  await creator.page.getByRole('button', { name: 'Continue with Meld' }).click();
+  await creator.page.getByRole('button', { name: 'Continue to checkout' }).click();
   const sellerWidget = await sellPopup;
   await sellerWidget.waitForURL(/token=session-/);
   await sellerWidget.close();
