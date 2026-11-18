@@ -4,7 +4,7 @@ import {decodeMsgpack,decodeTxn,encodeTxn,encodeAddressKey,txid,verifyTxnSig,typ
 import {conversionProblem,type WalletConversion} from './walletConversion.ts';
 import {signSwap,minReceive} from './swap.ts';
 import {MAINNET_GENESIS_HASH} from './rails/algorand.ts';
-import {confirmed,DEFAULT_ALGOD,submit,walletState,type WalletKeys} from './wallet.ts';
+import {confirmed,DEFAULT_ALGOD,submit,suggestedParams,walletState,type WalletKeys} from './wallet.ts';
 
 export interface ConversionJournal {
   version: 1; address: string; phase: 'prepared'|'submitted'|'confirmed'|'expired';
@@ -84,6 +84,8 @@ export async function executeWalletConversion(keys:WalletKeys,plan:WalletConvers
     if(previous.phase!=='confirmed')throw Error('A conversion is already pending. Resume it before making another.');
   }
   const state=await walletState(keys.address,n.algod,n.fetch);
+  const params=await suggestedParams(n.algod,n.fetch),first=decodeTxn(plan.raw[0]);
+  if(params.genesisID!=='mainnet-v1.0'||base64.encode(params.genesisHash)!==MAINNET_GENESIS_HASH||typeof first.fv!=='bigint'||typeof first.lv!=='bigint'||first.fv>params.firstValid+2n||first.lv<params.firstValid)throw Error('The conversion is not valid at the current mainnet round. Get a new quote.');
   const problem=conversionProblem(plan,state,n.now());if(problem)throw Error(problem);
   const signed=signSwap(plan.raw,keys.seed);
   const lastValid=String(decodeTxn(plan.raw[0]).lv);
