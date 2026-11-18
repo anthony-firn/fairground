@@ -45,6 +45,7 @@ export function StableConversion({state}:{state:WalletState}){
     <span className="tiny muted">Kept for account minimums and future network fees: {formatUsd(walletReserve(state))} ALGO. This reserve stays in ALGO.</span>
     <span className="small">Wallet signing: {signerProblem?'external authority required':'Ed25519 (standard signing)'}</span>
     <span className="tiny muted">The built-in signer is not post-quantum. Holding USDC does not upgrade its signing security. <a href="https://www.evolvetech.dev/wallet-setup/#security">Security and recovery</a></span>
+    <span className="tiny muted">This browser stores your signing keys. A compromised page on this website could expose them. Keep large balances in a separate wallet.</span>
     {signerProblem&&<p className="small warn">{signerProblem}</p>}
     {!LOCAL_PILOT&&pending?<button type="button" className="btn" disabled={busy} onClick={resume}>{busy?'Checking conversion…':'Resume conversion'}</button>:
       !LOCAL_PILOT&&state.active&&convertibleOnRequest(state)>0n&&<button type="button" className="btn" disabled={busy||!!signerProblem} onClick={review}>Convert ALGO to USDC</button>}
