@@ -27,7 +27,7 @@ function build(stored: Stored): Account {
   return { nostrKey, pubkey: getPublicKey(nostrKey), pq: generatePqKeys(hexToBytes(stored.pqSeed)), binding: stored.binding };
 }
 
-function create(nostrKey: Uint8Array, pqSeed = randomBytes(32)): Stored {
+function create(nostrKey: Uint8Array, pqSeed: Uint8Array = randomBytes(32)): Stored {
   return { nostrKey: bytesToHex(nostrKey), pqSeed: bytesToHex(pqSeed), binding: createPqBinding(nostrKey, generatePqKeys(pqSeed)) };
 }
 
