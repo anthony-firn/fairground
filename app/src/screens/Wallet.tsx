@@ -12,6 +12,8 @@ import type { Transfer } from '@core/rails/rail.ts';
 import { formatUsd, parseUsd } from '@core/pricing.ts';
 import { feesLeft } from '@core/walletkey.ts';
 import { WalletSetupLink } from '../components/WalletSetupLink.tsx';
+import {StableConversion} from '../components/StableConversion.tsx';
+import {walletSignerProblem} from '@core/walletConversion.ts';
 import { CryptoFundingSheet } from '../components/CryptoFunding.tsx';
 import { PaymentWaiting } from '../components/PassThroughPay.tsx';
 import { Field, Sheet, TopBar } from '../components/ui.tsx';
@@ -253,6 +255,7 @@ export function WalletScreen(_props: { query: URLSearchParams }) {
           <strong style={{ fontSize: 40 }}>{state ? balance(state.usdc) : '…'}</strong>
           <span className="tiny muted">Digital dollars (USDC). Only this account can move them.</span>
         </div>
+        {state&&<StableConversion state={state} />}
         {address === DEVELOPMENT_ADDRESS && (
           <p className="card small">This wallet receives Fairground’s development donations.{state && !state.active ? ' Your first deposit also enables it to receive donations.' : ''}</p>
         )}
@@ -263,8 +266,8 @@ export function WalletScreen(_props: { query: URLSearchParams }) {
           <>
             <div className="wallet-actions">
               <button type="button" className="btn primary" onClick={() => setSheet('buy')}>Add money</button>
-              <button type="button" className="btn" onClick={() => setSheet('sell')}>Cash out</button>
-              <button type="button" className="btn" onClick={() => setSheet('send')}>Send</button>
+              <button type="button" className="btn" disabled={!!walletSignerProblem(state)} onClick={() => setSheet('sell')}>Cash out</button>
+              <button type="button" className="btn" disabled={!!walletSignerProblem(state)} onClick={() => setSheet('send')}>Send</button>
               <button type="button" className="btn" onClick={() => setSheet('receive')}>Receive</button>
             </div>
             {!paidHere && (
@@ -297,8 +300,8 @@ export function WalletScreen(_props: { query: URLSearchParams }) {
         <details className="small muted">
           <summary>How this wallet works</summary>
           <p>It’s an Algorand account whose key is part of your Fairground account, so saving your account (a username and password, or the backup code)
-            saves the wallet too. Payments are signed on this device and nobody else, Fairground included, can move the money. It uses Algorand’s standard keys;
-            for large amounts, a quantum-safe Falcon account in a wallet like Pera is safer, and you can choose to be paid there instead.</p>
+            saves the wallet too. Payments use this device’s standard Ed25519 signer. For Falcon-1024 signing, use a compatible external wallet and verify its recovery support.
+            A post-quantum signer protects account authorization; it does not secure USDC’s issuer controls or every part of the network. You can choose an external wallet to receive payments.</p>
         </details>
       </div>
       {(sheet === 'buy' || sheet === 'sell') && <RampSheet side={sheet === 'buy' ? 'BUY' : 'SELL'} onClose={() => setSheet(undefined)} />}

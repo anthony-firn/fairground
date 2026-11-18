@@ -55,12 +55,13 @@ test('a rotation not signed by the previous key is ignored', () => {
   assert.deepEqual(resolvePqKey([a.binding, hijack], a.pubkey)?.key, a.pq.publicKey);
 });
 
-test('competing starting keys are flagged and the oldest wins', () => {
+test('competing starting keys are flagged and cannot authorize payments', () => {
   const a = actor();
   const later = createPqBinding(a.nostrKey, generatePqKeys(), undefined, a.binding.created_at + 60);
   const resolved = resolvePqKey([later, a.binding], a.pubkey);
   assert.deepEqual(resolved?.key, a.pq.publicKey);
   assert.equal(resolved?.conflict, true);
+  assert.equal(keyLookup([later,a.binding])(a.pubkey),undefined,'ambiguous key histories must not choose a payment identity');
 });
 
 test('bindings published by someone else do not count', () => {

@@ -139,11 +139,14 @@ export function resolvePqKey(events: Event[], author: string): PqKeyResolution |
   return { key, binding, conflict };
 }
 
-/** A lookup over every binding a client has seen; rebuild it when new bindings arrive. */
+/** A lookup over observed bindings. Conflicts cannot authorize payments; timestamps alone do not establish trust. */
 export function keyLookup(bindings: Event[]): KeyLookup {
   const cache = new Map<string, Uint8Array | undefined>();
   return (pubkey) => {
-    if (!cache.has(pubkey)) cache.set(pubkey, resolvePqKey(bindings, pubkey)?.key);
+    if (!cache.has(pubkey)) {
+      const resolved=resolvePqKey(bindings,pubkey);
+      cache.set(pubkey,resolved&&!resolved.conflict?resolved.key:undefined);
+    }
     return cache.get(pubkey);
   };
 }

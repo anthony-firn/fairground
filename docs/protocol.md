@@ -55,7 +55,7 @@ binding it replaces and also carries `["pq-prev", "ml-dsa-65", <sig>]` made with
 
 To resolve an author's key, start from their oldest valid binding without `prev`. Then repeatedly move to the oldest
 valid binding whose `prev` is the current one and whose `pq-prev` verifies under the current key. If more than one
-starting binding or rotation competes, the client reports a conflict.
+starting binding or rotation competes, payment verification returns no key and refuses the ambiguous identity. Timestamp ordering alone is not a trusted post-quantum identity anchor.
 
 The ML-DSA seed must be generated independently of the Nostr key. A quantum attacker who recovers a Nostr secret key
 from its public key would otherwise recover the ML-DSA key as well.

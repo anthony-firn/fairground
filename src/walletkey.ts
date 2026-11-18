@@ -27,6 +27,8 @@ export const walletAddress = (nostrKey: Uint8Array): string => encodeAddress(ed2
 
 export interface WalletState {
   address: string;
+  /** A rekeyed account needs the corresponding external signer; the built-in Ed25519 key cannot spend. */
+  authAddress?: string;
   /** Micro-ALGO held, and how much of it must stay in the account. */
   algo: bigint;
   minimum: bigint;
@@ -46,6 +48,7 @@ export async function walletState(address: string, algod = DEFAULT_ALGOD, fetchI
   const usdc = assets.find((a) => a['asset-id'] === USDC_ASSET_ID);
   return {
     address,
+    ...(typeof body['auth-addr'] === 'string' ? {authAddress: body['auth-addr']} : {}),
     algo: BigInt(Number(body.amount ?? 0)),
     minimum: BigInt(Number(body['min-balance'] ?? 100_000)),
     usdc: BigInt(usdc?.amount ?? 0),

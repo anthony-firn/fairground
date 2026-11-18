@@ -16,6 +16,7 @@ export const ROUTER_API = 'https://api.folksrouter.io/v2';
 export const ROUTER_FEE_BPS = 10;
 /** The most a conversion may come in under its quote. */
 export const SLIPPAGE_BPS = 50;
+export const MAX_SWAP_FEES = 20_000n;
 const SELECTOR = { forward: 'f06714c8', fixedInputEnd: '7dde205e' };
 
 export interface SwapQuote {
@@ -79,7 +80,7 @@ export function swapProblem(raw: Uint8Array[], user: string, q: SwapQuote): stri
     if (!(group instanceof Uint8Array) || !same(t.grp, group)) return 'the transactions aren’t one group';
     fees += typeof t.fee === 'bigint' ? t.fee : 0n;
   }
-  if (fees > 20_000n) return 'network fees are too high';
+  if (fees > MAX_SWAP_FEES) return 'network fees are too high';
   const [first, ...rest] = txns;
   const last = rest.pop()!;
   const sends = q.from === 0

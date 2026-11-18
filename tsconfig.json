@@ -3,8 +3,13 @@
     "target": "es2022",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["es2023", "dom"],
-    "types": ["node"],
+    "lib": [
+      "es2023",
+      "dom"
+    ],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
@@ -13,5 +18,12 @@
     "noUnusedLocals": true,
     "skipLibCheck": true
   },
-  "include": ["src", "test", "gateway", "tools/local-pilot.ts", "tools/opt-in-development-wallet.ts"]
+  "include": [
+    "src",
+    "test",
+    "gateway",
+    "tools/local-pilot.ts",
+    "tools/opt-in-development-wallet.ts",
+    "tools/settle-development-fund.ts"
+  ]
 }
