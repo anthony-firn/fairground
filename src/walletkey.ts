@@ -38,6 +38,13 @@ export interface WalletState {
   active: boolean;
 }
 
+/** Reject JSON numbers already rounded by the parser; never silently sign with an imprecise balance. */
+function accountInteger(value:unknown,fallback:number):bigint {
+  const n=value??fallback;
+  if(typeof n!=='number'||!Number.isSafeInteger(n)||n<0)throw Error('The node returned an invalid or imprecise wallet amount.');
+  return BigInt(n);
+}
+
 export async function walletState(address: string, algod = DEFAULT_ALGOD, fetchImpl: typeof fetch = (...a) => fetch(...a)): Promise<WalletState> {
   // algod's `exclude` takes only `all` or `none`, and `all` would drop the USDC holding, so ask for everything.
   const res = await fetchImpl(`${algod}/v2/accounts/${address}`);
@@ -49,9 +56,9 @@ export async function walletState(address: string, algod = DEFAULT_ALGOD, fetchI
   return {
     address,
     ...(typeof body['auth-addr'] === 'string' ? {authAddress: body['auth-addr']} : {}),
-    algo: BigInt(Number(body.amount ?? 0)),
-    minimum: BigInt(Number(body['min-balance'] ?? 100_000)),
-    usdc: BigInt(usdc?.amount ?? 0),
+    algo: accountInteger(body.amount,0),
+    minimum: accountInteger(body['min-balance'],100_000),
+    usdc: accountInteger(usdc?.amount,0),
     active: !!usdc && !usdc['is-frozen'],
   };
 }

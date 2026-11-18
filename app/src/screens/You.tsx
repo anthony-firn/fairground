@@ -52,6 +52,8 @@ export function You() {
           <button type="button" onClick={() => navigate('/relays')}>Relays <Icon name="chevron" /></button>
           <button type="button" onClick={() => navigate('/about')}>About Fairground <Icon name="chevron" /></button>
           <button type="button" onClick={() => setDonating(true)}>Support Fairground <Icon name="heart" /></button>
+          <a href="https://www.evolvetech.dev/legal/" target="_blank" rel="noopener noreferrer">Privacy, use and security limits</a>
+          <a href="https://www.evolvetech.dev/report/" target="_blank" rel="noopener noreferrer">Report a privacy, security or content problem</a>
         </div>
       </div>
       {edit.sheet}
@@ -432,7 +434,7 @@ export function About() {
       <TopBar title="About Fairground" back={() => navigate('/you')} />
       <div className="page">
         <div className="card stack">
-          <p style={{ margin: 0 }}>Fairground is a social network with no company in the middle. Your feed is ranked on your device, advertisers and fans pay
+          <p style={{ margin: 0 }}>Fairground is an experimental social network. Your feed is ranked on your device, advertisers and fans pay
             creators directly, and every deal is a public, signed record. It is its own network: you see only people on Fairground.</p>
           <p className="small muted" style={{ margin: 0 }}>Open source under the Apache 2.0 licence. Built by Anthony Firn at EvolveTech. MP3 encoding by
             {' '}<a href="https://lame.sourceforge.io" target="_blank" rel="noopener noreferrer">LAME</a> (LGPL); streaming by hls.js.</p>
