@@ -1,7 +1,8 @@
 /** Durable conversion submission: reloads/timeouts resume the same signed group, never a new trade. */
 import {base64} from '@scure/base';
 import {decodeMsgpack,decodeTxn,encodeTxn,encodeAddressKey,txid,verifyTxnSig,type Txn} from './algotx.ts';
-import {conversionProblem,type WalletConversion} from './walletConversion.ts';
+import {tradeProblem,type WalletConversion} from './walletConversion.ts';
+import {USDC_ASSET_ID} from './rails/algorand.ts';
 import {signSwap,minReceive} from './swap.ts';
 import {MAINNET_GENESIS_HASH} from './rails/algorand.ts';
 import {confirmed,DEFAULT_ALGOD,submit,suggestedParams,walletState,type WalletKeys} from './wallet.ts';
@@ -10,6 +11,8 @@ export interface ConversionJournal {
   version: 1; address: string; phase: 'prepared'|'submitted'|'confirmed'|'expired';
   txids: string[]; signed: string[]; createdAt: number; lastValid: string;
   input: string; expected: string; minimum: string; fees: string; reserve: string; round?: number;
+  /** USDC_ASSET_ID for a USDC-to-ALGO buy; absent for an ALGO-to-USDC conversion. */
+  from?: number;
 }
 export interface ConversionStore {
   read(): Promise<ConversionJournal|null>;
@@ -36,8 +39,11 @@ function checkedSigned(j:ConversionJournal,address:string):Uint8Array[]{
     return bytes;
   });
   const reserve=BigInt(j.reserve),fees=BigInt(j.fees),amount=BigInt(j.input),now=Date.now();
-  const plan:WalletConversion={address,raw,fees,reserve,expiresAt:now+30000,quote:{from:0,to:31566704,amount,quote:BigInt(j.expected),fees,priceImpact:0,payload:''}};
-  const problem=conversionProblem(plan,{address,active:true,algo:amount+fees+reserve,minimum:reserve-300000n,usdc:0n},now);
+  const from=j.from??0;if(from!==0&&from!==USDC_ASSET_ID)throw Error('Invalid saved conversion.');
+  const plan:WalletConversion={address,raw,fees,reserve,expiresAt:now+30000,quote:{from,to:from?0:USDC_ASSET_ID,amount,quote:BigInt(j.expected),fees,priceImpact:0,payload:''}};
+  // A balance that satisfied the policy when the group was signed; the signed bytes themselves are rechecked in full.
+  const state=from?{address,active:true,algo:reserve+fees,minimum:reserve-300000n,usdc:amount}:{address,active:true,algo:amount+fees+reserve,minimum:reserve-300000n,usdc:0n};
+  const problem=tradeProblem(plan,state,now);
   if(problem)throw Error('Saved conversion is invalid: '+problem);
   return signed;
 }
@@ -86,11 +92,12 @@ export async function executeWalletConversion(keys:WalletKeys,plan:WalletConvers
   const state=await walletState(keys.address,n.algod,n.fetch);
   const params=await suggestedParams(n.algod,n.fetch),first=decodeTxn(plan.raw[0]);
   if(params.genesisID!=='mainnet-v1.0'||base64.encode(params.genesisHash)!==MAINNET_GENESIS_HASH||typeof first.fv!=='bigint'||typeof first.lv!=='bigint'||first.fv>params.firstValid+2n||first.lv<params.firstValid)throw Error('The conversion is not valid at the current mainnet round. Get a new quote.');
-  const problem=conversionProblem(plan,state,n.now());if(problem)throw Error(problem);
+  const problem=tradeProblem(plan,state,n.now());if(problem)throw Error(problem);
   const signed=signSwap(plan.raw,keys.seed);
   const lastValid=String(decodeTxn(plan.raw[0]).lv);
   const journal:ConversionJournal={version:1,address:keys.address,phase:'prepared',txids:ids,signed:signed.map(s=>base64.encode(s)),createdAt:n.now(),lastValid,
-    input:String(plan.quote.amount),expected:String(plan.quote.quote),minimum:String(minReceive(plan.quote)),fees:String(plan.fees),reserve:String(plan.reserve)};
+    input:String(plan.quote.amount),expected:String(plan.quote.quote),minimum:String(minReceive(plan.quote)),fees:String(plan.fees),reserve:String(plan.reserve),
+    ...(plan.quote.from?{from:plan.quote.from}:{})};
   // A storage/quota failure must happen before any signed bytes leave this device.
   await store.write(journal);
   return resumeWalletConversion(keys.address,store,network);
