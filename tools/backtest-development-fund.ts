@@ -14,7 +14,7 @@ import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {DIP_RULE} from '../src/fundTrader.ts';
 import {band,bootstrapSeries,dip,dipInUptrend,holdAlgo,holdUsdc,kelly,rebalance,rng,rsi,simulate,trend,walkForward,
- FOLKS_GENERAL,FOLKS_ULTRASWAP_UP,MEASURED_COSTS,MEASURED_MINING,type LoanTerms,type Mining,type Result,type Series,type SimOptions,type Strategy} from '../src/fundBacktest.ts';
+ FOLKS_GENERAL,FOLKS_ULTRASWAP_UP,LIVE_LOAN,MEASURED_COSTS,MEASURED_MINING,type LoanTerms,type Mining,type Result,type Series,type SimOptions,type Strategy} from '../src/fundBacktest.ts';
 
 const dir=join(homedir(),'.local/share/evolve-bootstrap/backtest');
 await mkdir(dir,{recursive:true,mode:0o700});
@@ -100,7 +100,7 @@ const coins=await Promise.all(['BTC-USD','ETH-USD','SOL-USD','DOGE-USD'].map(asy
 
 // --leverage: would borrowing against the bought ALGO (Folks loans) have grown the fund faster?
 if(process.argv.includes('--leverage')){
- const levels:[string,LoanTerms|undefined][]=[['no borrowing',undefined],
+ const levels:[string,LoanTerms|undefined][]=[['no borrowing',undefined],['live 1.25x',LIVE_LOAN],
   ...[1.25,1.5,2].map(l=>[`general ${l}x`,{...FOLKS_GENERAL,leverage:l}] as [string,LoanTerms]),
   ...[1.5,2,3,4].map(l=>[`ultraswap ${l}x`,{...FOLKS_ULTRASWAP_UP,leverage:l}] as [string,LoanTerms])];
  const out:Record<string,unknown>={};

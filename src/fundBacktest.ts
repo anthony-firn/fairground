@@ -52,10 +52,16 @@ export interface LoanTerms {
   opFee: number; setupFee: number;
   /** Borrow only while the loan's health (collateral × factor / debt) stays at least this after buying. */
   entryHealth: number;
+  /** Below deleverHealth the trader sells ALGO and repays until health is deleverTo (avoiding the liquidation bonus). */
+  deleverHealth?: number; deleverTo?: number;
+  /** Borrow only on buys of at least this much own USDC (fees swamp smaller ones). */
+  minTradeUsd?: number;
 }
-export const FOLKS_GENERAL: LoanTerms = {name: 'Folks general loan', leverage: 1.5, collateralFactor: 0.65, borrowApy: 0.0593, liquidationBonus: 0.08, liquidationMax: 0.5, opFee: 15_000, setupFee: 50_000, entryHealth: 1.05};
+export const FOLKS_GENERAL: LoanTerms = {name: 'Folks general loan', leverage: 1.5, collateralFactor: 0.65, borrowApy: 0.0593, liquidationBonus: 0.08, liquidationMax: 0.5, opFee: 15_000, setupFee: 50_000, entryHealth: 1.05, minTradeUsd: 5};
+/** The live trader's loan (src/fundTrader.ts LEVERAGE, BORROW_HEALTH, DELEVER_HEALTH, DELEVER_TO). */
+export const LIVE_LOAN: LoanTerms = {...FOLKS_GENERAL, name: 'live 1.25x', leverage: 1.25, entryHealth: 2, deleverHealth: 1.15, deleverTo: 1.6, minTradeUsd: 5};
 /** Folks' leveraged-long loan type. Its on-chain liquidation bonus reads 0; 5% is assumed to stay conservative. */
-export const FOLKS_ULTRASWAP_UP: LoanTerms = {name: 'Folks Ultraswap up', leverage: 2, collateralFactor: 0.825, borrowApy: 0.0593, liquidationBonus: 0.05, liquidationMax: 1, opFee: 15_000, setupFee: 50_000, entryHealth: 1.05};
+export const FOLKS_ULTRASWAP_UP: LoanTerms = {name: 'Folks Ultraswap up', leverage: 2, collateralFactor: 0.825, borrowApy: 0.0593, liquidationBonus: 0.05, liquidationMax: 1, opFee: 15_000, setupFee: 50_000, entryHealth: 1.05, minTradeUsd: 5};
 
 export interface Mining { nanoPerDay: number; uptime: number; batchNano: number; keep: number; nanoUsd: (t: number) => number }
 /** 1.5 NANO/day measured 2026-11-18/19; 70% uptime allows for the laptop being used or off. */
@@ -184,7 +190,9 @@ export function irr(flows: [number, number][], end: number, value: number): numb
   return (lo + hi) / 2;
 }
 
-export interface SimOptions { from?: number; to?: number; costs?: Costs; mining?: Mining; wallet?: Wallet; loan?: LoanTerms }
+export interface SimOptions { from?: number; to?: number; costs?: Costs; mining?: Mining; wallet?: Wallet; loan?: LoanTerms;
+  /** Called after each hour's loan upkeep, for analysis. */
+  trace?: (h: {i: number; close: number; inTrade: boolean; algo: number; usdc: number; debt: number; liquidations: number}) => void }
 
 export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, ind = new Indicators(s.c)): Result {
   const costs = opts.costs ?? MEASURED_COSTS, mining = opts.mining ?? MEASURED_MINING, w0 = opts.wallet ?? LIVE_WALLET;
@@ -213,6 +221,15 @@ export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, i
     if (lent > 0) lent *= 1 + lendHour;
     if (debt > 0 && loan) {
       debt *= 1 + loan.borrowApy / 8760;
+      if (loan.deleverHealth && loan.deleverTo && inTrade) {
+        const collateral = Math.max(0, algo - reserve) / 1e6 * close;
+        if (collateral * loan.collateralFactor < debt / 1e6 * loan.deleverHealth) {
+          // Here all the position's ALGO is collateral, so selling some lowers collateral too: solve (C - x)·CF = T·(D - x(1 - cost)).
+          const T = loan.deleverTo, x = Math.max(0, (T * debt / 1e6 - collateral * loan.collateralFactor) / (T * (1 - costs.swap) - loan.collateralFactor));
+          const usd = Math.min(x, collateral), got = usd * (1 - costs.swap);
+          algo -= usd / close * 1e6 + loan.opFee; debt = Math.max(0, debt - got * 1e6); feesUsd += usd * costs.swap + loan.opFee / 1e6 * close;
+        }
+      }
       for (let k = 0; k < 4 && debt > 0; k++) {
         const collateral = Math.max(0, algo - reserve) / 1e6 * close;
         if (collateral * loan.collateralFactor >= debt / 1e6) break;
@@ -222,6 +239,7 @@ export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, i
         if (Math.max(0, algo - reserve) <= 0) { debt = 0; inTrade = false; closeTrip(); }
       }
     }
+    opts.trace?.({i, close, inTrade, algo, usdc, debt, liquidations});
     const price = s.o[i + 1];
     for (let k = 0; k < costs.piecesPerHour; k++) {
       const conv = convertible();
@@ -235,7 +253,7 @@ export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, i
         while (fee > costs.feeCap && amount / 2 >= Number(MIN_BUY_USDC)) { amount /= 2; fee = costs.networkFee(amount / 1e6 / price); }
         if (fee > costs.feeCap || amount < Number(MIN_BUY_USDC) || algo < w0.minimum + fee + Number(BUY_FEE_FLOOR)) break;
         let borrowed = 0;
-        if (loan) {
+        if (loan && amount / 1e6 >= (loan.minTradeUsd ?? 0)) {
           // Borrow (leverage - 1) times this piece, as far as the loan's entry health allows.
           const posAlgo = Math.max(0, algo - reserve) / 1e6, want = amount * (loan.leverage - 1);
           const healthy = (b: number) => (posAlgo + (amount + b) / 1e6 / price * (1 - costs.swap)) * price * loan.collateralFactor >= (debt + b) / 1e6 * loan.entryHealth;
@@ -248,6 +266,7 @@ export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, i
         feesUsd += total / 1e6 * cost + fee / 1e6 * price; pieces++;
         if (!inTrade) { inTrade = true; entryPrice = price; entryAt = i; }
         spentUsd += total / 1e6; boughtAlgo += total / 1e6 / price * (1 - cost);
+        opts.trace?.({i: i + 0.5, close: price, inTrade, algo, usdc, debt, liquidations});
       } else {
         const min = m.reason === 'sweep' ? Number(MIN_SWEEP_ALGO) : 1;
         let amount = Math.min(m.algo ?? conv, conv), fee = costs.networkFee(amount / 1e6);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {policyLimit} from '../src/fundPolicy.ts';
 import {DIP_RULE,FUND_FEE_CAP} from '../src/fundTrader.ts';
-import {botStrategy,dip,holdUsdc,irr,kelly,measuredNetworkFee,rng,simulate,FOLKS_GENERAL,FOLKS_ULTRASWAP_UP,MEASURED_COSTS,MEASURED_MINING,NO_MINING,YEAR_S,
+import {botStrategy,dip,holdUsdc,irr,kelly,measuredNetworkFee,rng,simulate,FOLKS_GENERAL,FOLKS_ULTRASWAP_UP,LIVE_LOAN,MEASURED_COSTS,MEASURED_MINING,NO_MINING,YEAR_S,
  type Series,type Strategy,type View} from '../src/fundBacktest.ts';
 
 /** A random walk with occasional crashes and recoveries, so dip rules trade. */
@@ -119,4 +119,13 @@ test('a dip that keeps falling liquidates a leveraged position at a penalty',()=
  assert.ok(lev.value<plain.value,`${lev.value} vs ${plain.value}`);
  const capped=simulate(s,dip({hours:480,drop:0.2}),{...loanWallet,loan:{...FOLKS_GENERAL,leverage:5}});
  assert.ok(capped.maxDebtUsd<5*1.9,'borrowing is capped by the loan’s entry health');
+});
+
+test('the live loan repays part of its debt before a liquidator would, keeping more of a falling position',()=>{
+ const s=dipThen(0.07,0.03);
+ const raw=simulate(s,dip({hours:480,drop:0.2}),{...loanWallet,loan:{...FOLKS_GENERAL,leverage:2.4,entryHealth:1.05}});
+ const live=simulate(s,dip({hours:480,drop:0.2}),{...loanWallet,loan:{...LIVE_LOAN,leverage:2.4,entryHealth:1.05}});
+ assert.ok(raw.liquidations>0,'without deleveraging the crash liquidates');
+ assert.equal(live.liquidations,0,'deleveraging avoids liquidation');
+ assert.ok(live.value>raw.value,`${live.value} vs ${raw.value}`);
 });
