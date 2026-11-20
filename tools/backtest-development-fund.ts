@@ -99,6 +99,36 @@ const coins=await Promise.all(['BTC-USD','ETH-USD','SOL-USD','DOGE-USD'].map(asy
  // Rescaled to ALGO's price level: only returns matter, but the reserve and network fees are counted in coin units.
  const raw=await hourly(p,'2021-06-01'),k=0.1/raw.c[0];return {...raw,o:raw.o.map(x=>x*k),c:raw.c.map(x=>x*k)};}));
 
+// --candidates: refinements of the live rule, judged on unseen periods, other coins and simulated years.
+if(process.argv.includes('--candidates')){
+ const R=DIP_RULE,avg=(v:{ind:{sma(i:number,n:number):number};i:number})=>v.ind.sma(v.i,R.hours);
+ const peak=(v:{s:Series;i:number;entryAt:number})=>{let m=0;for(let k=Math.max(v.entryAt,0);k<=v.i;k++)if(v.s.c[k]>m)m=v.s.c[k];return m;};
+ const below=(v:{price:number;ind:{sma(i:number,n:number):number};i:number},d=R.drop)=>v.price<avg(v)*(1-d);
+ const cands:[string,Strategy][]=[
+  ['live (buy 20% under the 14-day average, sell at it)',live],
+  ['wait for a bounce: buy only on an up-close',ruleStrategy('bounce',R.hours+1,v=>below(v)&&v.s.c[v.i]>v.s.c[v.i-1],v=>v.price>=avg(v))],
+  ['let winners run: sell 3% off the peak above the average',ruleStrategy('trail',R.hours,v=>below(v),v=>v.price>=avg(v)&&v.price<peak(v)*0.97)],
+  ['bounce + let winners run',ruleStrategy('bounce+trail',R.hours+1,v=>below(v)&&v.s.c[v.i]>v.s.c[v.i-1],v=>v.price>=avg(v)&&v.price<peak(v)*0.97)],
+  ['sell 3% above the average',dip({hours:R.hours,drop:R.drop,exit:1.03})],
+  ['buy 18% under',dip({hours:R.hours,drop:0.18})],
+  ['buy 22% under',dip({hours:R.hours,drop:0.22})]];
+ const cut=Math.round((Date.parse('2024-11-18')/1000-algo.t[0])/3600),train=2*8760,paths=Number(process.argv[process.argv.indexOf('--paths')+1])||200;
+ const sims=[] as Series[];{const r=rng(13);for(let p=0;p<paths;p++)sims.push(bootstrapSeries(algo,8760,1100,r,false));}
+ console.log(`Refinements of the live rule (edge over USDC that is not lent; growth = mean log of value / money put in over ${paths} simulated years)`);
+ console.log(`   ${'candidate'.padEnd(52)} ${'2019-24'.padStart(7)} ${'2021-26'.padStart(7)} ${'BTC'.padStart(6)} ${'ETH'.padStart(6)} ${'SOL'.padStart(6)} ${'DOGE'.padStart(6)} ${'growth'.padStart(7)} ${'trips/yr'.padStart(8)}`);
+ const out:Record<string,unknown>={};
+ for(const [label,st] of cands){
+  const edge=(s:Series,o:SimOptions)=>simulate(s,st,o).irr-simulate(s,holdUsdc,{...o,costs:{...MEASURED_COSTS,lendApy:0}}).irr;
+  const row=[edge(algo,{...opts,from:0,to:cut}),edge(algo,{...opts,from:train}),...coins.map(s=>edge(s,opts))];
+  const g=sims.map(s=>{const x=simulate(s,st,{...opts,from:1100,mining:{...mining,nanoUsd:()=>0.31}});return Math.log(Math.max(x.value/x.contributed,1e-6));});
+  const growth=g.reduce((a,b)=>a+b,0)/g.length,trips=simulate(algo,st,opts).roundTrips/(algo.c.length/8760);
+  out[label]={periods:row,growth,trips};
+  console.log(`   ${label.padEnd(52)} ${row.map(x=>pct(x).padStart(row.indexOf(x)<2?7:6)).join(' ')} ${(growth>=0?'+':'')+growth.toFixed(3).padStart(6)} ${trips.toFixed(1).padStart(8)}`);
+ }
+ await writeFile(join(dir,`candidates-${new Date().toISOString().slice(0,10)}.json`),JSON.stringify(out,null,1),{mode:0o600});
+ process.exit();
+}
+
 // --daily: can a rule that trades about once a day beat waiting in lent USDC, after costs, on data it never saw?
 if(process.argv.includes('--daily')){
  const H=(h:number)=>h, at=(v:{s:Series;i:number})=>new Date(v.s.t[v.i]*1000).getUTCHours();
@@ -188,6 +218,11 @@ if(algo.c.length-since<48)console.log(`   only ${Math.max(0,algo.c.length-since)
 else{
  const o={...opts,from:since},b=simulate(algo,holdUsdc,o);
  for(const [s,x] of [[live,o],[previous,{...prevOpts,from:since}],[holdAlgo,o]] as const)console.log('  '+line({...simulate(algo,s,x),strategy:nameOf(s,s===previous?prevOpts:opts)},b));
+ // Candidates scored on new prices only (paper): a change needs to pull ahead here, not just in history.
+ const sma=(v:{ind:{sma(i:number,n:number):number};i:number})=>v.ind.sma(v.i,DIP_RULE.hours),pk=(v:{s:Series;i:number;entryAt:number})=>{let m=0;for(let k=Math.max(v.entryAt,0);k<=v.i;k++)if(v.s.c[k]>m)m=v.s.c[k];return m;};
+ const watch:[string,Strategy][]=[['paper: bounce + let winners run',ruleStrategy('bounce+trail',DIP_RULE.hours+1,v=>v.price<sma(v)*(1-DIP_RULE.drop)&&v.s.c[v.i]>v.s.c[v.i-1],v=>v.price>=sma(v)&&v.price<pk(v)*0.97)],
+  ['paper: let winners run',ruleStrategy('trail',DIP_RULE.hours,v=>v.price<sma(v)*(1-DIP_RULE.drop),v=>v.price>=sma(v)&&v.price<pk(v)*0.97)]];
+ for(const [label,s] of watch)console.log('  '+line({...simulate(algo,s,o),strategy:label},b));
 }
 try{
  const rows=(await readFile(join(homedir(),'.local/share/evolve-bootstrap/treasury/equity.jsonl'),'utf8')).trim().split('\n').map(l=>JSON.parse(l) as {t:string;valueUsd:number;inTrade:boolean});
