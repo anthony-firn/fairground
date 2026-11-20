@@ -4,7 +4,8 @@
  *
  *   node tools/backtest-development-fund.ts [--no-fetch] [--paths N] [--leverage]
  *
- * --leverage studies borrowing against the bought ALGO instead of the usual report.
+ * --leverage studies borrowing against the bought ALGO instead of the usual report; --daily tests rules that trade
+ * about once a day.
  *
  * Only out-of-sample sections (unseen years, walk-forward, other coins, simulated years) should change the live rule.
  * Prices are cached in ~/.local/share/evolve-bootstrap/backtest/, with a dated JSON report next to them.
@@ -13,7 +14,7 @@ import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {DIP_RULE} from '../src/fundTrader.ts';
-import {band,bootstrapSeries,dip,dipInUptrend,holdAlgo,holdUsdc,kelly,rebalance,rng,rsi,simulate,trend,walkForward,
+import {band,bootstrapSeries,dip,dipInUptrend,holdAlgo,holdUsdc,kelly,rebalance,rng,rsi,ruleStrategy,simulate,trend,walkForward,
  FOLKS_GENERAL,FOLKS_ULTRASWAP_UP,LIVE_LOAN,MEASURED_COSTS,MEASURED_MINING,type LoanTerms,type Mining,type Result,type Series,type SimOptions,type Strategy} from '../src/fundBacktest.ts';
 
 const dir=join(homedir(),'.local/share/evolve-bootstrap/backtest');
@@ -97,6 +98,43 @@ const nameOf=(s:Strategy,o:SimOptions)=>s===live&&o===opts?'live':s===previous&&
 const coins=await Promise.all(['BTC-USD','ETH-USD','SOL-USD','DOGE-USD'].map(async p=>{
  // Rescaled to ALGO's price level: only returns matter, but the reserve and network fees are counted in coin units.
  const raw=await hourly(p,'2021-06-01'),k=0.1/raw.c[0];return {...raw,o:raw.o.map(x=>x*k),c:raw.c.map(x=>x*k)};}));
+
+// --daily: can a rule that trades about once a day beat waiting in lent USDC, after costs, on data it never saw?
+if(process.argv.includes('--daily')){
+ const H=(h:number)=>h, at=(v:{s:Series;i:number})=>new Date(v.s.t[v.i]*1000).getUTCHours();
+ const ret=(v:{s:Series;i:number},h:number)=>v.s.c[v.i]/v.s.c[Math.max(0,v.i-h)]-1;
+ const maxAbove=(v:{s:Series;i:number},h:number)=>{let m=0;for(let k=v.i-h;k<v.i;k++)if(v.s.c[k]>m)m=v.s.c[k];return m;};
+ const fam:Record<string,Strategy[]>={
+  'dip under 24h average':[0.015,0.02,0.03,0.04,0.05].flatMap(d=>[24,48].map(m=>ruleStrategy(`24h dip ${d*100}% max ${m}h`,25,
+   v=>v.price<v.ind.sma(v.i,24)*(1-d),v=>v.price>=v.ind.sma(v.i,24)||v.i-v.entryAt>=m))),
+  'sharp one-hour drop':[0.015,0.02,0.03,0.04].flatMap(x=>[4,12,24].map(h=>ruleStrategy(`-${x*100}% in 1h, hold ${h}h`,2,
+   v=>ret(v,1)<=-x,v=>v.i-v.entryAt>=h))),
+  'short RSI':[2,4,6].flatMap(n=>[[5,50],[10,50],[15,60]].map(([lo,hi])=>rsi(n,lo,hi))),
+  '24h band':[24,48].flatMap(h=>[2,2.5,3].map(k=>band(h,k))),
+  'breakout over 24h high':[6,12,24].map(h=>ruleStrategy(`24h breakout, hold ${h}h`,25,v=>v.price>maxAbove(v,24),v=>v.i-v.entryAt>=h)),
+  'time of day':[0,4,8,12,16,20].flatMap(b=>[4,8,12].map(h=>ruleStrategy(`buy ${b}:00 UTC hold ${h}h`,1,v=>at(v)===b,v=>v.i-v.entryAt>=H(h)))),
+ };
+ const train=2*8760,step=8760/2,oos={...opts,from:train},years=(algo.c.length-train)/8760;
+ const lentBase=simulate(algo,holdUsdc,oos);
+ console.log(`Daily-frequency rules on ALGO, out of sample ${date(algo.t[train])}..${date(algo.t[algo.t.length-1])} (${years.toFixed(1)} years)`);
+ console.log(`   baseline: USDC lent at ${(MEASURED_COSTS.lendApy*100).toFixed(1)}%, IRR ${pct(lentBase.irr)}; live dip rule IRR ${pct(simulate(algo,live,oos).irr)} (${(simulate(algo,live,oos).roundTrips/years).toFixed(1)} trades/yr)\n`);
+ console.log(`   ${'family (re-tuned every 6 months)'.padEnd(34)} ${'IRR'.padStart(7)} ${'edge'.padStart(7)} ${'trades/day'.padStart(10)} ${'avg trade'.padStart(9)} ${'won'.padStart(5)}`);
+ const out:Record<string,unknown>={};
+ for(const [f,list] of Object.entries(fam)){
+  const w=walkForward(algo,list,train,step,opts),r=w.result,tr=r.tradeReturns;
+  const avg=tr.length?tr.reduce((a,b)=>a+b,0)/tr.length:0,won=tr.length?tr.filter(x=>x>0).length/tr.length:0;
+  out[f]={irr:r.irr,edge:r.irr-lentBase.irr,tradesPerDay:tr.length/(years*365),avgTrade:avg,won};
+  console.log(`   ${f.padEnd(34)} ${pct(r.irr).padStart(7)} ${pct(r.irr-lentBase.irr).padStart(7)} ${(tr.length/(years*365)).toFixed(2).padStart(10)} ${pct(avg).padStart(9)} ${(won*100).toFixed(0).padStart(4)}%`);
+ }
+ console.log('\n   Best single setting of each family over all ALGO history (in-sample, so optimistic), then on other coins as fixed:');
+ for(const list of Object.values(fam)){
+  const best=list.map(s=>({s,r:simulate(algo,s,opts)})).sort((a,b)=>b.r.irr-a.r.irr)[0];
+  const coinsEdge=coins.map(c=>simulate(c,best.s,opts).irr-simulate(c,holdUsdc,opts).irr);
+  console.log(`   ${best.s.name.padEnd(34)} ALGO ${pct(best.r.irr-simulate(algo,holdUsdc,opts).irr).padStart(7)} ${(best.r.roundTrips/((algo.c.length)/8760*365)).toFixed(2)}/day | BTC ETH SOL DOGE ${coinsEdge.map(x=>pct(x).padStart(7)).join(' ')}`);
+ }
+ await writeFile(join(dir,`daily-${new Date().toISOString().slice(0,10)}.json`),JSON.stringify(out,null,1),{mode:0o600});
+ process.exit();
+}
 
 // --leverage: would borrowing against the bought ALGO (Folks loans) have grown the fund faster?
 if(process.argv.includes('--leverage')){
