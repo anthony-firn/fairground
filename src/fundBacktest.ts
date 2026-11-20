@@ -43,6 +43,20 @@ export interface Costs {
 }
 export const MEASURED_COSTS: Costs = {swap: 0.0035, impact: measuredImpact, networkFee: measuredNetworkFee, feeCap: Number(FUND_FEE_CAP), piecesPerHour: 12, lendApy: 0.042, lendMinUsd: 1, lendOpFee: 6500};
 
+/** Borrowing USDC against the position's ALGO to hold `leverage` times what the fund's own USDC buys. A loan is
+ * liquidated when debt exceeds collateral value × collateralFactor: a liquidator repays up to liquidationMax of the debt
+ * and takes ALGO worth that much plus liquidationBonus. Terms read from Folks Finance mainnet on 2026-11-20. */
+export interface LoanTerms {
+  name: string; leverage: number; collateralFactor: number; borrowApy: number; liquidationBonus: number; liquidationMax: number;
+  /** µALGO of network fees per borrow or repay, and once to set up the loan escrow. */
+  opFee: number; setupFee: number;
+  /** Borrow only while the loan's health (collateral × factor / debt) stays at least this after buying. */
+  entryHealth: number;
+}
+export const FOLKS_GENERAL: LoanTerms = {name: 'Folks general loan', leverage: 1.5, collateralFactor: 0.65, borrowApy: 0.0593, liquidationBonus: 0.08, liquidationMax: 0.5, opFee: 15_000, setupFee: 50_000, entryHealth: 1.05};
+/** Folks' leveraged-long loan type. Its on-chain liquidation bonus reads 0; 5% is assumed to stay conservative. */
+export const FOLKS_ULTRASWAP_UP: LoanTerms = {name: 'Folks Ultraswap up', leverage: 2, collateralFactor: 0.825, borrowApy: 0.0593, liquidationBonus: 0.05, liquidationMax: 1, opFee: 15_000, setupFee: 50_000, entryHealth: 1.05};
+
 export interface Mining { nanoPerDay: number; uptime: number; batchNano: number; keep: number; nanoUsd: (t: number) => number }
 /** 1.5 NANO/day measured 2026-11-18/19; 70% uptime allows for the laptop being used or off. */
 export const MEASURED_MINING: Mining = {nanoPerDay: 1.5, uptime: 0.7, batchNano: 5, keep: 0.92, nanoUsd: () => 0.31};
@@ -157,6 +171,8 @@ export interface Result {
   worst: number;
   /** Each round trip's return on the USDC put in, after costs. */
   tradeReturns: number[];
+  /** Times a loan was (partly) liquidated, and the largest debt in USD. */
+  liquidations: number; maxDebtUsd: number;
 }
 
 /** Annualized money-weighted return: contributions are negative flows at their times, the final value positive. */
@@ -168,12 +184,14 @@ export function irr(flows: [number, number][], end: number, value: number): numb
   return (lo + hi) / 2;
 }
 
-export interface SimOptions { from?: number; to?: number; costs?: Costs; mining?: Mining; wallet?: Wallet }
+export interface SimOptions { from?: number; to?: number; costs?: Costs; mining?: Mining; wallet?: Wallet; loan?: LoanTerms }
 
 export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, ind = new Indicators(s.c)): Result {
   const costs = opts.costs ?? MEASURED_COSTS, mining = opts.mining ?? MEASURED_MINING, w0 = opts.wallet ?? LIVE_WALLET;
   const from = opts.from ?? 0, to = Math.min(opts.to ?? s.c.length, s.c.length);
   const reserve = Number(policyReserve(BigInt(w0.minimum)));
+  const loan = opts.loan && opts.loan.leverage > 1 ? opts.loan : undefined;
+  let debt = 0, liquidations = 0, maxDebt = 0, loanSetUp = false;
   let lent = 0, algo = w0.algo, usdc = w0.usdc, inTrade = false, entryPrice = 0, entryAt = 0, spentUsd = 0, boughtAlgo = 0;
   let pieces = 0, feesUsd = 0, hoursIn = 0, nano = 0, contributed = w0.algo / 1e6 * s.c[from] + w0.usdc / 1e6;
   const flows: [number, number][] = [[s.t[from], contributed]], tradeReturns: number[] = [];
@@ -193,6 +211,17 @@ export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, i
       }
     }
     if (lent > 0) lent *= 1 + lendHour;
+    if (debt > 0 && loan) {
+      debt *= 1 + loan.borrowApy / 8760;
+      for (let k = 0; k < 4 && debt > 0; k++) {
+        const collateral = Math.max(0, algo - reserve) / 1e6 * close;
+        if (collateral * loan.collateralFactor >= debt / 1e6) break;
+        const repaid = Math.min(debt, Math.max(debt * loan.liquidationMax, 1));
+        algo -= Math.min(Math.max(0, algo - reserve), repaid / 1e6 * (1 + loan.liquidationBonus) / close * 1e6);
+        debt -= repaid; liquidations++;
+        if (Math.max(0, algo - reserve) <= 0) { debt = 0; inTrade = false; closeTrip(); }
+      }
+    }
     const price = s.o[i + 1];
     for (let k = 0; k < costs.piecesPerHour; k++) {
       const conv = convertible();
@@ -205,11 +234,20 @@ export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, i
         let amount = Math.min(m.usdc, usdc), fee = costs.networkFee(amount / 1e6 / price);
         while (fee > costs.feeCap && amount / 2 >= Number(MIN_BUY_USDC)) { amount /= 2; fee = costs.networkFee(amount / 1e6 / price); }
         if (fee > costs.feeCap || amount < Number(MIN_BUY_USDC) || algo < w0.minimum + fee + Number(BUY_FEE_FLOOR)) break;
-        const cost = costs.swap + costs.impact(amount / 1e6);
-        usdc -= amount; algo += amount / price * (1 - cost) - fee;
-        feesUsd += amount / 1e6 * cost + fee / 1e6 * price; pieces++;
+        let borrowed = 0;
+        if (loan) {
+          // Borrow (leverage - 1) times this piece, as far as the loan's entry health allows.
+          const posAlgo = Math.max(0, algo - reserve) / 1e6, want = amount * (loan.leverage - 1);
+          const healthy = (b: number) => (posAlgo + (amount + b) / 1e6 / price * (1 - costs.swap)) * price * loan.collateralFactor >= (debt + b) / 1e6 * loan.entryHealth;
+          borrowed = want; for (let k = 0; k < 30 && borrowed > 0 && !healthy(borrowed); k++) borrowed *= 0.8;
+          if (!healthy(borrowed)) borrowed = 0;
+          if (borrowed > 0) { const setup = loanSetUp ? 0 : loan.setupFee; loanSetUp = true; algo -= loan.opFee + setup; feesUsd += (loan.opFee + setup) / 1e6 * price; debt += borrowed; maxDebt = Math.max(maxDebt, debt); }
+        }
+        const total = amount + borrowed, cost = costs.swap + costs.impact(total / 1e6);
+        usdc -= amount; algo += total / price * (1 - cost) - fee;
+        feesUsd += total / 1e6 * cost + fee / 1e6 * price; pieces++;
         if (!inTrade) { inTrade = true; entryPrice = price; entryAt = i; }
-        spentUsd += amount / 1e6; boughtAlgo += amount / 1e6 / price * (1 - cost);
+        spentUsd += total / 1e6; boughtAlgo += total / 1e6 / price * (1 - cost);
       } else {
         const min = m.reason === 'sweep' ? Number(MIN_SWEEP_ALGO) : 1;
         let amount = Math.min(m.algo ?? conv, conv), fee = costs.networkFee(amount / 1e6);
@@ -218,20 +256,22 @@ export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, i
         const cost = costs.swap + costs.impact(amount / 1e6 * price);
         algo -= amount + fee; const got = amount / 1e6 * price * (1 - cost); usdc += got * 1e6;
         feesUsd += amount / 1e6 * price * cost + fee / 1e6 * price; pieces++;
+        if (debt > 0 && loan) { const repay = Math.min(debt, usdc); usdc -= repay; debt -= repay; if (debt <= 0) { debt = 0; algo -= loan.opFee; feesUsd += loan.opFee / 1e6 * price; } }
         if (m.reason === 'exit') { inTrade = false; closeTrip(price); }
         else if (m.reason === 'rebalance') inTrade = convertible() > 0;
       }
     }
     // USDC that is only waiting is lent once there is enough to cover the deposit's fee.
-    if (lendHour > 0 && !inTrade && usdc >= costs.lendMinUsd * 1e6 && algo >= w0.minimum + costs.lendOpFee + Number(BUY_FEE_FLOOR)) {
+    if (debt > 0 && !inTrade && usdc > 0) { const repay = Math.min(debt, usdc); usdc -= repay; debt -= repay; }
+    if (lendHour > 0 && !inTrade && debt <= 0 && usdc >= costs.lendMinUsd * 1e6 && algo >= w0.minimum + costs.lendOpFee + Number(BUY_FEE_FLOOR)) {
       lent += usdc; usdc = 0; algo -= costs.lendOpFee; feesUsd += costs.lendOpFee / 1e6 * close;
     }
     if (inTrade) hoursIn++;
-    worst = Math.min(worst, (algo / 1e6 * close + (usdc + lent) / 1e6) / contributed);
+    worst = Math.min(worst, (algo / 1e6 * close + (usdc + lent - debt) / 1e6) / contributed);
   }
-  const last = to - 1, value = algo / 1e6 * s.c[last] + (usdc + lent) / 1e6;
+  const last = to - 1, value = Math.max(0, algo / 1e6 * s.c[last] + (usdc + lent - debt) / 1e6);
   return {strategy: strategy.name, series: s.name, from: s.t[from], to: s.t[last], value, contributed, irr: irr(flows, s.t[last], value),
-    pieces, roundTrips: tradeReturns.length, feesUsd, inMarket: hoursIn / Math.max(1, last - from), worst, tradeReturns};
+    pieces, roundTrips: tradeReturns.length, feesUsd, inMarket: hoursIn / Math.max(1, last - from), worst, tradeReturns, liquidations, maxDebtUsd: maxDebt / 1e6};
 }
 
 /** Growth-optimal fraction of the stake per trade (Kelly), from a sample of trade returns: argmax mean(log(1+f·r)). */

@@ -2,7 +2,9 @@
  * Research for the development fund's trader: refreshes hourly price history, then backtests the live rule and other
  * strategy families with src/fundBacktest.ts.
  *
- *   node tools/backtest-development-fund.ts [--no-fetch] [--paths N]
+ *   node tools/backtest-development-fund.ts [--no-fetch] [--paths N] [--leverage]
+ *
+ * --leverage studies borrowing against the bought ALGO instead of the usual report.
  *
  * Only out-of-sample sections (unseen years, walk-forward, other coins, simulated years) should change the live rule.
  * Prices are cached in ~/.local/share/evolve-bootstrap/backtest/, with a dated JSON report next to them.
@@ -12,7 +14,7 @@ import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {DIP_RULE} from '../src/fundTrader.ts';
 import {band,bootstrapSeries,dip,dipInUptrend,holdAlgo,holdUsdc,kelly,rebalance,rng,rsi,simulate,trend,walkForward,
- MEASURED_COSTS,MEASURED_MINING,type Mining,type Result,type Series,type SimOptions,type Strategy} from '../src/fundBacktest.ts';
+ FOLKS_GENERAL,FOLKS_ULTRASWAP_UP,MEASURED_COSTS,MEASURED_MINING,type LoanTerms,type Mining,type Result,type Series,type SimOptions,type Strategy} from '../src/fundBacktest.ts';
 
 const dir=join(homedir(),'.local/share/evolve-bootstrap/backtest');
 await mkdir(dir,{recursive:true,mode:0o700});
@@ -95,6 +97,51 @@ const nameOf=(s:Strategy,o:SimOptions)=>s===live&&o===opts?'live':s===previous&&
 const coins=await Promise.all(['BTC-USD','ETH-USD','SOL-USD','DOGE-USD'].map(async p=>{
  // Rescaled to ALGO's price level: only returns matter, but the reserve and network fees are counted in coin units.
  const raw=await hourly(p,'2021-06-01'),k=0.1/raw.c[0];return {...raw,o:raw.o.map(x=>x*k),c:raw.c.map(x=>x*k)};}));
+
+// --leverage: would borrowing against the bought ALGO (Folks loans) have grown the fund faster?
+if(process.argv.includes('--leverage')){
+ const levels:[string,LoanTerms|undefined][]=[['no borrowing',undefined],
+  ...[1.25,1.5,2].map(l=>[`general ${l}x`,{...FOLKS_GENERAL,leverage:l}] as [string,LoanTerms]),
+  ...[1.5,2,3,4].map(l=>[`ultraswap ${l}x`,{...FOLKS_ULTRASWAP_UP,leverage:l}] as [string,LoanTerms])];
+ const out:Record<string,unknown>={};
+ const cut=Math.round((Date.parse('2024-11-18')/1000-algo.t[0])/3600),train=2*8760;
+ console.log('A. Live rule with borrowing, ALGO 2019-2026 (IRR on money put in):');
+ console.log(`   ${'setup'.padEnd(18)} ${'all'.padStart(7)} ${'2019-24'.padStart(7)} ${'2021-26'.padStart(7)}  liquidations  worst  ${'BTC'.padStart(6)} ${'ETH'.padStart(6)} ${'SOL'.padStart(6)} ${'DOGE'.padStart(6)}`);
+ for(const [label,loan] of levels){
+  const o={...opts,loan},all=simulate(algo,live,o);
+  const row={all:all.irr,early:simulate(algo,live,{...o,from:0,to:cut}).irr,late:simulate(algo,live,{...o,from:train}).irr,
+   liquidations:all.liquidations,worst:all.worst,coins:coins.map(s=>simulate(s,live,o).irr)};
+  out[label]=row;
+  console.log(`   ${label.padEnd(18)} ${pct(row.all).padStart(7)} ${pct(row.early).padStart(7)} ${pct(row.late).padStart(7)}  ${String(row.liquidations).padStart(12)}  ${(row.worst*100).toFixed(0).padStart(4)}%  ${row.coins.map(x=>pct(x).padStart(6)).join(' ')}`);
+ }
+ console.log('\n   by year (IRR): '+levels.map(([l])=>l).join(' / '));
+ for(let y=new Date(algo.t[0]*1000).getUTCFullYear();y<=new Date().getUTCFullYear();y++){
+  const a=Math.max(0,Math.round((Date.UTC(y,0,1)/1000-algo.t[0])/3600)),b=Math.min(algo.c.length,Math.round((Date.UTC(y+1,0,1)/1000-algo.t[0])/3600));
+  if(b-a<24*60)continue;
+  console.log(`   ${y}: `+levels.map(([,loan])=>{const r=simulate(algo,live,{...opts,loan,from:a,to:b});return pct(r.irr)+(r.liquidations?'*':'');}).join(' / '));
+ }
+ console.log('   (* = at least one liquidation that year)');
+ console.log('\n   stress, all history: borrowing at 12% and a 10% liquidation penalty');
+ for(const [label,loan] of levels.slice(1)){const r=simulate(algo,live,{...opts,loan:{...loan!,borrowApy:0.12,liquidationBonus:0.10}});console.log(`   ${label.padEnd(18)} IRR ${pct(r.irr).padStart(7)}  liquidations ${r.liquidations}`);}
+ const paths=Number(process.argv[process.argv.indexOf('--paths')+1])||400;
+ console.log(`\nB. ${paths} simulated years (30-day runs of real ALGO history, $124 of mining):`);
+ for(const flat of [false,true]){
+  const r=rng(11),res=levels.map(()=>[] as {g:number;liq:number}[]);
+  for(let p=0;p<paths;p++){
+   const s=bootstrapSeries(algo,8760,1100,r,flat);
+   levels.forEach(([,loan],j)=>{const x=simulate(s,live,{...opts,loan,from:1100,mining:{...mining,nanoUsd:()=>0.31}});res[j].push({g:x.value/x.contributed,liq:x.liquidations});});
+  }
+  console.log(`   ${flat?'downtrend removed':'as ALGO actually moved'}:`);
+  levels.forEach(([label],j)=>{
+   const g=res[j].map(x=>x.g).sort((a,b)=>a-b),med=g[Math.floor(g.length/2)],logg=g.reduce((a,b)=>a+Math.log(Math.max(b,1e-6)),0)/g.length;
+   const liq=res[j].filter(x=>x.liq>0).length/paths,half=g.filter(x=>x<0.5).length/paths,dbl=g.filter(x=>x>=2).length/paths,mean=g.reduce((a,b)=>a+b,0)/g.length;
+   (out[`${flat?'flat':'real'} ${label}`]={median:med,mean,meanLog:logg,liquidated:liq,loseHalf:half,double:dbl});
+   console.log(`     ${label.padEnd(18)} median ${med.toFixed(3)}x  mean ${mean.toFixed(3)}x  mean log growth ${logg>=0?'+':''}${logg.toFixed(3)}  liquidated ${(liq*100).toFixed(1).padStart(5)}%  loses half ${(half*100).toFixed(1)}%  doubles ${(dbl*100).toFixed(1)}%`);
+  });
+ }
+ await writeFile(join(dir,`leverage-${new Date().toISOString().slice(0,10)}.json`),JSON.stringify(out,null,1),{mode:0o600});
+ process.exit();
+}
 
 // 1. The only truly unseen data: prices since the live settings were adopted, and the bot's own record.
 const ADOPTED=Date.parse('2026-11-20T16:00:00Z')/1000,since=Math.round((ADOPTED-algo.t[0])/3600);

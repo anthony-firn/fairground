@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {policyLimit} from '../src/fundPolicy.ts';
 import {DIP_RULE,FUND_FEE_CAP} from '../src/fundTrader.ts';
-import {botStrategy,dip,holdUsdc,irr,kelly,measuredNetworkFee,rng,simulate,MEASURED_COSTS,MEASURED_MINING,NO_MINING,YEAR_S,
+import {botStrategy,dip,holdUsdc,irr,kelly,measuredNetworkFee,rng,simulate,FOLKS_GENERAL,FOLKS_ULTRASWAP_UP,MEASURED_COSTS,MEASURED_MINING,NO_MINING,YEAR_S,
  type Series,type Strategy,type View} from '../src/fundBacktest.ts';
 
 /** A random walk with occasional crashes and recoveries, so dip rules trade. */
@@ -93,4 +93,30 @@ test('waiting USDC earns the pool rate after deposit fees, and a buy withdraws i
  const dipSeries:Series={name:'dip',t:Float64Array.from({length:1200},(_,k)=>k*3600),o:Float64Array.from(c,(x,k)=>k?c[k-1]:x),c};
  const r=simulate(dipSeries,dip({hours:480,drop:0.2}),{mining:NO_MINING,wallet:{algo:600_000,usdc:5_000_000,minimum:200_000}});
  assert.equal(r.roundTrips,1,'the lent USDC was withdrawn and spent on the dip');
+});
+
+/** 1,200 hours at $0.10, a drop to `low` for five hours, then `after` for the rest. */
+function dipThen(low:number,after:number):Series{
+ const c=new Float64Array(1200).fill(0.10);c.fill(low,700,705);c.fill(after,705);
+ return {name:'dip',t:Float64Array.from({length:1200},(_,k)=>k*3600),o:Float64Array.from(c,(x,k)=>k?c[k-1]:x),c};
+}
+const loanWallet={mining:NO_MINING,wallet:{algo:600_000,usdc:5_000_000,minimum:200_000},costs:{...MEASURED_COSTS,lendApy:0}};
+
+test('borrowing multiplies a recovered dip’s gain, net of interest and fees, and is repaid on exit',()=>{
+ const s=dipThen(0.07,0.10),plain=simulate(s,dip({hours:480,drop:0.2}),loanWallet);
+ const one=simulate(s,dip({hours:480,drop:0.2}),{...loanWallet,loan:{...FOLKS_GENERAL,leverage:1}});
+ assert.ok(Math.abs(one.value-plain.value)<1e-9,'leverage 1 is no loan');
+ const two=simulate(s,dip({hours:480,drop:0.2}),{...loanWallet,loan:{...FOLKS_ULTRASWAP_UP,leverage:2}});
+ assert.equal(two.liquidations,0);assert.ok(two.maxDebtUsd>4.9&&two.maxDebtUsd<5.1,`debt ${two.maxDebtUsd}`);
+ const gain1=plain.value-plain.contributed,gain2=two.value-two.contributed;
+ assert.ok(gain2>1.95*gain1&&gain2<2.01*gain1,`${gain2} vs ${gain1}`);// fixed swap fees spread over a bigger trade
+});
+
+test('a dip that keeps falling liquidates a leveraged position at a penalty',()=>{
+ const s=dipThen(0.07,0.045),plain=simulate(s,dip({hours:480,drop:0.2}),loanWallet);
+ const lev=simulate(s,dip({hours:480,drop:0.2}),{...loanWallet,loan:{...FOLKS_GENERAL,leverage:2.4}});
+ assert.ok(lev.liquidations>0,'liquidated');
+ assert.ok(lev.value<plain.value,`${lev.value} vs ${plain.value}`);
+ const capped=simulate(s,dip({hours:480,drop:0.2}),{...loanWallet,loan:{...FOLKS_GENERAL,leverage:5}});
+ assert.ok(capped.maxDebtUsd<5*1.9,'borrowing is capped by the loan’s entry health');
 });
