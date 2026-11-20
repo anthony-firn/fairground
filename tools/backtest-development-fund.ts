@@ -14,7 +14,7 @@ import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {DIP_RULE} from '../src/fundTrader.ts';
-import {band,bootstrapSeries,dip,dipInUptrend,holdAlgo,holdUsdc,kelly,rebalance,rng,rsi,ruleStrategy,simulate,trend,walkForward,
+import {band,bootstrapSeries,dip,dipInUptrend,holdAlgo,holdUsdc,irr,kelly,rebalance,rng,rsi,ruleStrategy,simulate,trend,walkForward,
  FOLKS_GENERAL,FOLKS_ULTRASWAP_UP,LIVE_LOAN,MEASURED_COSTS,MEASURED_MINING,type LoanTerms,type Mining,type Result,type Series,type SimOptions,type Strategy} from '../src/fundBacktest.ts';
 
 const dir=join(homedir(),'.local/share/evolve-bootstrap/backtest');
@@ -98,6 +98,58 @@ const nameOf=(s:Strategy,o:SimOptions)=>s===live&&o===opts?'live':s===previous&&
 const coins=await Promise.all(['BTC-USD','ETH-USD','SOL-USD','DOGE-USD'].map(async p=>{
  // Rescaled to ALGO's price level: only returns matter, but the reserve and network fees are counted in coin units.
  const raw=await hourly(p,'2021-06-01'),k=0.1/raw.c[0];return {...raw,o:raw.o.map(x=>x*k),c:raw.c.map(x=>x*k)};}));
+
+// --portfolio: the dip rule watching many markets with one shared pot. More markets, more chances to trade, if the
+// extra dips aren't all the same crash. Exchange costs (taker fee + spread), $1 minimum orders, the same mined income.
+if(process.argv.includes('--portfolio')){
+ const names=['ALGO','BTC','ETH','SOL','DOGE','XRP','ADA','AVAX','LINK','LTC','DOT','ATOM','XLM','NEAR','UNI'];
+ const all:Series[]=[];
+ for(const n of names){try{all.push(await hourly(`${n}-USD`,'2021-06-01'));}catch(error){console.error(n,(error as Error).message);}}
+ const start=Math.max(...all.map(s=>s.t[0])),end=Math.min(...all.map(s=>s.t[s.t.length-1])),n=Math.floor((end-start)/3600);
+ const at=(s:Series,t:number)=>Math.round((t-s.t[0])/3600);
+ type Run={irr:number;value:number;put:number;trades:number;tradeDays:number;days:number;worst:number;avg:number;won:number};
+ function run(coins:Series[],k:number,cost:number,{hours,drop}=DIP_RULE,from=start):Run{
+  const off=coins.map(s=>at(s,from)),sums=coins.map(s=>{const p=new Float64Array(s.c.length+1);for(let i=0;i<s.c.length;i++)p[i+1]=p[i]+s.c[i];return p;});
+  let cash=0.05,put=0.05,worst=1;const flows:[number,number][]=[[from,0.05]],pos=new Map<number,{qty:number;paid:number}>(),rets:number[]=[],days=new Set<number>();
+  const nanoHour=mining.nanoPerDay*mining.uptime/24;let nano=0;
+  const len=Math.floor((end-from)/3600);
+  for(let h=hours;h<len-1;h++){
+   const t=from+h*3600;
+   nano+=nanoHour;if(nano>=mining.batchNano){nano-=mining.batchNano;const usd=mining.batchNano*0.31*mining.keep;cash+=usd;put+=usd;flows.push([t,usd]);}
+   const close=(j:number)=>coins[j].c[off[j]+h],open=(j:number)=>coins[j].o[off[j]+h+1],avg=(j:number)=>(sums[j][off[j]+h]-sums[j][off[j]+h-hours])/hours;
+   for(const [j,p] of [...pos])if(close(j)>=avg(j)){const got=p.qty*open(j)*(1-cost);cash+=got;rets.push(got/p.paid-1);pos.delete(j);days.add(Math.floor(t/86400));}
+   const equity=cash+[...pos].reduce((s,[j,p])=>s+p.qty*close(j),0);
+   const signals=coins.map((_,j)=>j).filter(j=>!pos.has(j)&&close(j)<avg(j)*(1-drop)).sort((a,b)=>close(a)/avg(a)-close(b)/avg(b));
+   for(const j of signals){
+    if(pos.size>=k)break;
+    const slice=Math.min(cash,equity/k);if(slice<1)break;
+    cash-=slice;pos.set(j,{qty:slice*(1-cost)/open(j),paid:slice});days.add(Math.floor(t/86400));
+   }
+   worst=Math.min(worst,(cash+[...pos].reduce((s,[j,p])=>s+p.qty*close(j),0))/put);
+  }
+  const value=cash+[...pos].reduce((s,[j,p])=>s+p.qty*coins[j].c[off[j]+len-1],0);
+  return {irr:irr(flows,from+len*3600,value),value,put,trades:rets.length,tradeDays:days.size,days:len/24,worst,avg:rets.length?rets.reduce((a,b)=>a+b,0)/rets.length:0,won:rets.length?rets.filter(r=>r>0).length/rets.length:0};
+ }
+ const cash=run([],1,0).irr; // mined income held as cash, no trading
+ console.log(`Dip rule (${DIP_RULE.hours}h, ${DIP_RULE.drop*100}%) on ${all.length} markets, ${date(start)}..${date(end)} (${(n/8760).toFixed(1)} years), $1 minimum orders, same mined income`);
+ console.log(`   holding the income as cash: IRR ${pct(cash)}\n`);
+ console.log(`   ${'setup'.padEnd(40)} ${'IRR'.padStart(7)} ${'trades/yr'.padStart(9)} ${'days w/ trade'.padStart(13)} ${'avg trade'.padStart(9)} ${'won'.padStart(5)} ${'worst'.padStart(6)}`);
+ const top5=all.filter(s=>['ALGO','BTC','ETH','SOL','DOGE'].includes(s.name));
+ const rows:[string,Series[],number,number][]=[['ALGO only, Algorand costs (live)',all.filter(s=>s.name==='ALGO'),1,0.0042],['ALGO only, exchange costs',all.filter(s=>s.name==='ALGO'),1,0.0045],
+  ['5 markets, 1 position at a time',top5,1,0.0045],['5 markets, up to 3 positions',top5,3,0.0045],
+  [`${all.length} markets, 1 position`,all,1,0.0045],[`${all.length} markets, up to 3 positions`,all,3,0.0045],[`${all.length} markets, up to 5 positions`,all,5,0.0045],
+  [`${all.length} markets, up to 5, maker fees (0.25%)`,all,5,0.0030]];
+ const out:Record<string,Run>={};
+ for(const [label,coins,k,cost] of rows){
+  const r=run(coins,k,cost);out[label]=r;
+  console.log(`   ${label.padEnd(40)} ${pct(r.irr).padStart(7)} ${(r.trades/(r.days/365)).toFixed(1).padStart(9)} ${((r.tradeDays/r.days)*100).toFixed(1).padStart(12)}% ${pct(r.avg).padStart(9)} ${(r.won*100).toFixed(0).padStart(4)}% ${(r.worst*100).toFixed(0).padStart(5)}%`);
+ }
+ console.log('\n   By market alone (1 position, exchange costs): IRR and trades/yr');
+ console.log('   '+all.map(s=>{const r=run([s],1,0.0045);return `${s.name} ${pct(r.irr)} (${(r.trades/(r.days/365)).toFixed(1)})`;}).join(' | '));
+ // How often the extra dips are the same crash: share of entry days where 3+ markets signalled together.
+ await writeFile(join(dir,`portfolio-${new Date().toISOString().slice(0,10)}.json`),JSON.stringify(out,null,1),{mode:0o600});
+ process.exit();
+}
 
 // --candidates: refinements of the live rule, judged on unseen periods, other coins and simulated years.
 if(process.argv.includes('--candidates')){

@@ -26,6 +26,8 @@
     "tools/opt-in-development-wallet.ts",
     "tools/settle-development-fund.ts",
     "tools/trade-development-fund.ts",
-    "tools/backtest-development-fund.ts"
+    "tools/backtest-development-fund.ts",
+    "tools/watch-liquidations.ts",
+    "tools/liquidate-loans.ts"
   ]
 }
