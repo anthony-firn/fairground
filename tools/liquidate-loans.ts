@@ -14,10 +14,10 @@ import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {DEVELOPMENT_ADDRESS} from '../src/defaults.ts';
 import {confirmed,DEFAULT_ALGOD,submit,suggestedParams,walletKeys,walletState,type WalletKeys} from '../src/wallet.ts';
-import {decodeTxn,encodeTxn,signTxn,txid,addressKey,type Txn} from '../src/algotx.ts';
+import {decodeTxn,encodeTxn,signTxn,txid} from '../src/algotx.ts';
 import {simulate} from '../src/fundLending.ts';
 import {minReceive,prepareSwap,quoteSwap} from '../src/swap.ts';
-import {FALGO,FOLKS_ALGO_POOL_APP,FOLKS_LOANS,FOLKS_ORACLE_0,USD,USDC,assessLoan,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,
+import {FALGO,FOLKS_ALGO_POOL_APP,algoToKeep,FOLKS_LOANS,FOLKS_ORACLE_0,USD,USDC,assessLoan,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,
  liquidatorShare,parseLoanLocal,parseLoanTerms,parseOracle,parsePoolIndexes,type KV,type LoanLocal,type PoolTerms} from '../src/fundLiquidations.ts';
 
 const IDX='https://mainnet-idx.4160.nodely.dev',PM=971350278n,LOAN=FOLKS_LOANS.general;
@@ -25,8 +25,13 @@ const IDX='https://mainnet-idx.4160.nodely.dev',PM=971350278n,LOAN=FOLKS_LOANS.g
 const MIN_PROFIT_USD=0.01;
 /** OpUp inner calls: the whole group used 8,448 of 19,600 in simulation; 8 leaves ~1,700 to spare. */
 const BUDGET=8;
-/** ALGO the wallet keeps above its minimum for the trader's own fees (src/walletConversion.ts BUY_FEE_FLOOR). */
-const KEEP_ALGO=100_000n;
+/** Spare ALGO (above the minimum) the liquidator tops the wallet back up to from its winnings, for both bots' fees.
+ * It stays under the trader's 1 ALGO sweep threshold (MIN_SWEEP_ALGO), so the trader leaves it alone. */
+const TARGET_SPARE=400_000n;
+/** A group's fees for sizing (about 0.05 ALGO; the opt-in adds 0.001), and the least spare ALGO left after paying them. */
+const FEE_ESTIMATE=60_000n,FEE_RESERVE=20_000n;
+let lastSaid='';
+const say=(m:string)=>{if(m!==lastSaid)console.log(m);lastSaid=m;};
 const dir=join(homedir(),'.local/share/evolve-bootstrap/liquidations'),treasury=join(homedir(),'.local/share/evolve-bootstrap/treasury');
 await mkdir(dir,{recursive:true,mode:0o700});
 const UA={'User-Agent':'fund-liquidator/1'};
@@ -84,55 +89,52 @@ async function tick(live:boolean){
   cands.push({escrow,repay,f,fWithdraw,algoIn,expectedProfitUsd,loanAssets:[...new Set([...h.collateral.map(c=>Number(c.asset)),...h.borrows.map(b=>Number(b.asset))])].sort((a,b)=>a-b)});
  }
  cands.sort((a,b)=>b.expectedProfitUsd-a.expectedProfitUsd);
- const feeUsd=0.047*Number(algoPrice)/1e8;
+ const feeUsd=Number(FEE_ESTIMATE)/1e6*Number(algoPrice)/1e8;
  const worth=cands.filter(c=>c.expectedProfitUsd-feeUsd>=MIN_PROFIT_USD);
  await writeFile(join(dir,'executor-status.json'),JSON.stringify({checkedAt:new Date().toISOString(),live,loans:loans.size,candidates:cands.length,worth:worth.length,
   top:worth.slice(0,5).map(c=>({escrow:c.escrow,repayUsdc:Number(c.repay)/1e6,expectedProfitUsd:Number(c.expectedProfitUsd.toFixed(4))}))},null,1),{mode:0o600});
  const paused=await access(join(treasury,'PAUSE')).then(()=>true,()=>false);
+ if(!worth.length)return;
+ const me=DEVELOPMENT_ADDRESS!,acct=await get(`${DEFAULT_ALGOD}/v2/accounts/${me}`);
+ // The first liquidation also opts the wallet in to fALGO (0.1 ALGO more minimum): the opt-in is only paid for when it earns.
+ const optIn=!(acct.assets??[]).some((x:{'asset-id':number})=>x['asset-id']===FALGO),mbr=optIn?100_000n:0n;
+ const state=await walletState(me),spare=state.algo-state.minimum,price=Number(algoPrice)/1e8;
  for(const c of worth.slice(0,2)){
-  const me=DEVELOPMENT_ADDRESS!,quote=await quoteSwap(0,USDC,c.algoIn),minOut=minReceive(quote);
-  if(minOut<flashRepayment(c.repay)+BigInt(Math.ceil((feeUsd+MIN_PROFIT_USD)*1e6))){failedAt.set(c.escrow,Date.now());continue;}
+  const need=flashRepayment(c.repay);
+  let algoSwap=c.algoIn,quote=await quoteSwap(0,USDC,algoSwap),minOut=minReceive(quote);
+  if(minOut<need){failedAt.set(c.escrow,Date.now());continue;}
+  // Keep enough of the ALGO to top the fee float back up and swap the rest (re-quoted: it must still cover the repayment).
+  const keep=algoToKeep(c.algoIn,minOut,need,spare-mbr-FEE_ESTIMATE,TARGET_SPARE);
+  if(keep>0n){const q=await quoteSwap(0,USDC,c.algoIn-keep),m=minReceive(q);if(m>=need){algoSwap=c.algoIn-keep;quote=q;minOut=m;}}
   const p=await suggestedParams(DEFAULT_ALGOD);
-  const args={liquidator:me,escrow:c.escrow,loanApp:LOAN,loanAssets:c.loanAssets,repay:c.repay,fWithdraw:c.fWithdraw,minCollateral:c.fWithdraw,budget:BUDGET};
+  const args={liquidator:me,escrow:c.escrow,loanApp:LOAN,loanAssets:c.loanAssets,repay:c.repay,fWithdraw:c.fWithdraw,minCollateral:c.fWithdraw,budget:BUDGET,optIn};
   const txns=flashLiquidationGroup(args,(await prepareSwap(me,quote)).map(decodeTxn),p);
-  const problem=flashLiquidationProblem(txns,args,c.algoIn,minOut);
+  const fees=txns.reduce((n,t)=>n+(typeof t.fee==='bigint'?t.fee:0n),0n),kept=c.algoIn-algoSwap;
+  const profitUsd=Number(kept-fees)/1e6*price+Number(minOut-need)/1e6;
+  if(profitUsd<MIN_PROFIT_USD){failedAt.set(c.escrow,Date.now());continue;}
+  const problem=flashLiquidationProblem(txns,args,algoSwap,minOut);
   if(problem){await log('skipped.jsonl',{escrow:c.escrow,problem});failedAt.set(c.escrow,Date.now());continue;}
-  const raw=txns.map(encodeTxn),sim=await simulate([raw],DEFAULT_ALGOD),g=sim['txn-groups']?.[0];
-  const profitUsd=Number(minOut-flashRepayment(c.repay))/1e6-feeUsd;
+  const sim=await simulate([txns.map(encodeTxn)],DEFAULT_ALGOD),g=sim['txn-groups']?.[0];
   if(!sim.ok||g?.['failure-message']){await log('skipped.jsonl',{escrow:c.escrow,simulation:String(sim.message??g?.['failure-message']).slice(0,200)});failedAt.set(c.escrow,Date.now());continue;}
-  if(paused||!live){console.log(`${paused?'Paused':'Dry run'}: would liquidate ${c.escrow.slice(0,8)}… repaying ${Number(c.repay)/1e6} USDC for ≥$${profitUsd.toFixed(4)} net`);await log('dry-run.jsonl',{escrow:c.escrow,repay:String(c.repay),profitUsd});continue;}
-  const state=await walletState(me);
-  const fees=txns.reduce((n,t)=>n+(typeof t.fee==='bigint'?t.fee:0n),0n);
-  if(state.algo<state.minimum+KEEP_ALGO+fees){console.log('Not enough spare ALGO for liquidation fees');return;}
+  const summary=`${c.escrow.slice(0,8)}…: repay ${Number(c.repay)/1e6} USDC, keep ${Number(kept)/1e6} ALGO + ≥${Number(minOut-need)/1e6} USDC, ≥$${profitUsd.toFixed(4)} net${optIn?' (with the fALGO opt-in)':''}`;
+  if(paused||!live){say(`${paused?'Paused':'Dry run'}: would liquidate ${summary}`);await log('dry-run.jsonl',{escrow:c.escrow,repay:String(c.repay),kept:String(kept),profitUsd});continue;}
+  if(spare<mbr+fees+FEE_RESERVE){say(`Not enough spare ALGO for a liquidation: ${Number(spare)/1e6} spare, needs ${Number(mbr+fees+FEE_RESERVE)/1e6}`);return;}
   const keys=await ownerKeys();
   try{
    const signed=txns.map(t=>signTxn(t,keys.seed)),id=txid(txns[0]);
-   await submit(signed,DEFAULT_ALGOD).then(()=>confirmed(id,DEFAULT_ALGOD)).then(async round=>{
-    await log('trades.jsonl',{escrow:c.escrow,txid:id,round,repay:String(c.repay),minOut:String(minOut),profitUsdAtLeast:profitUsd});
-    console.log(`Liquidated ${c.escrow.slice(0,8)}…: repaid ${Number(c.repay)/1e6} USDC, ≥$${profitUsd.toFixed(4)} net, round ${round} ${id}`);
-   }).catch(async error=>{await log('lost.jsonl',{escrow:c.escrow,error:String((error as Error).message).slice(0,200)});failedAt.set(c.escrow,Date.now());});
+   const round=await submit(signed,DEFAULT_ALGOD).then(()=>confirmed(id,DEFAULT_ALGOD)).catch(async error=>{
+    await log('lost.jsonl',{escrow:c.escrow,error:String((error as Error).message).slice(0,200)});failedAt.set(c.escrow,Date.now());return undefined;});
+   if(round===undefined)continue;
+   await log('trades.jsonl',{escrow:c.escrow,txid:id,round,repay:String(c.repay),keptAlgo:String(kept),minOut:String(minOut),fees:String(fees),optIn,profitUsdAtLeast:profitUsd});
+   console.log(`Liquidated ${summary}, round ${round} ${id}`);
+   return; // balances and the opt-in changed: the next check starts fresh
   }finally{keys.seed.fill(0);}
  }
-}
-
-/** The fund must hold fALGO to receive liquidated collateral: a one-time zero-amount opt-in. */
-async function ensureOptIn(live:boolean){
- const me=DEVELOPMENT_ADDRESS!,acct=await get(`${DEFAULT_ALGOD}/v2/accounts/${me}`);
- if((acct.assets??[]).some((x:{'asset-id':number})=>x['asset-id']===FALGO))return;
- const state=await walletState(me);
- if(state.algo<state.minimum+100_000n+KEEP_ALGO+1000n){console.log('Waiting for ALGO to opt in to fALGO (adds 0.1 ALGO to the minimum)');return;}
- if(!live){console.log('Dry run: would opt in to fALGO');return;}
- const p=await suggestedParams(DEFAULT_ALGOD),keys=await ownerKeys();
- try{
-  const t:Txn={snd:addressKey(me),fee:1000n,fv:p.firstValid,lv:p.firstValid+20n,gen:p.genesisID,gh:p.genesisHash,type:'axfer',arcv:addressKey(me),xaid:BigInt(FALGO)};
-  const id=txid(t);await submit([signTxn(t,keys.seed)],DEFAULT_ALGOD);await confirmed(id,DEFAULT_ALGOD);
-  await log('trades.jsonl',{kind:'fALGO opt-in',txid:id});console.log('Opted in to fALGO',id);
- }finally{keys.seed.fill(0);}
 }
 
 const live=process.argv.includes('--live'),every=Number(process.argv[process.argv.indexOf('--every')+1])||5;
 console.log(`Folks liquidator ${live?'LIVE':'dry run'}: USDC debt / ALGO collateral, ≥$${MIN_PROFIT_USD} net, checked every ${every}s`);
 for(;;){
- try{await ensureOptIn(live);await tick(live);}catch(error){console.error('Liquidator deferred:',(error as Error).message);}
+ try{await tick(live);}catch(error){console.error('Liquidator deferred:',(error as Error).message);}
  await new Promise(r=>setTimeout(r,every*1000));
 }

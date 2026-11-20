@@ -5,7 +5,7 @@ import {generateSecretKey} from 'nostr-tools/pure';
 import {addressKey,applicationAddress,assignGroup,type Txn} from '../src/algotx.ts';
 import {walletKeys} from '../src/wallet.ts';
 import {MAINNET_GENESIS_HASH} from '../src/rails/algorand.ts';
-import {FALGO,FOLKS_LOANS,USDC,assessLoan,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,liquidatorShare,
+import {FALGO,FOLKS_LOANS,USDC,algoToKeep,assessLoan,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,liquidatorShare,
  parseLoanLocal,parseLoanTerms,parseOracle,parsePoolIndexes,type KV} from '../src/fundLiquidations.ts';
 
 const me=walletKeys(generateSecretKey()).address,escrow=walletKeys(generateSecretKey()).address;
@@ -47,14 +47,14 @@ test('a synthetic loan is valued like the SDK and its best liquidation earns the
  assert.ok(Math.abs(Number(best.bonusValue)/1e4-2.5*0.08*0.9)<0.01,'8% bonus less the 10% protocol share');
 });
 
-function group(){
+function group(optIn=false){
  const router=addressKey(applicationAddress(3279848327n));
  const head=(fee:bigint):Txn=>({snd:addressKey(me),fee,fv:1000n,lv:1020n,gen:'mainnet-v1.0',gh:params.genesisHash});
  const u64=(n:bigint)=>words([n]);
  const routerTxns:Txn[]=[{...head(3000n),type:'pay',rcv:router,amt:750_000n},
   {...head(14000n),type:'appl',apid:3279848327n,apaa:[Buffer.from('f06714c8','hex'),u64(0n)]},
   {...head(0n),type:'appl',apid:3279848327n,apaa:[Buffer.from('7dde205e','hex'),u64(BigInt(USDC)),u64(54_000n),u64(0n),addressKey(me)]}];
- const args={liquidator:me,escrow,loanApp:FOLKS_LOANS.general,loanAssets:[0,USDC],repay:52_000n,fWithdraw:643_000n,minCollateral:643_000n,budget:8};
+ const args={liquidator:me,escrow,loanApp:FOLKS_LOANS.general,loanAssets:[0,USDC],repay:52_000n,fWithdraw:643_000n,minCollateral:643_000n,budget:8,optIn};
  return {args,txns:flashLiquidationGroup(args,routerTxns,params),algoIn:750_000n,minOut:54_000n};
 }
 
@@ -74,4 +74,26 @@ test('the flash liquidation check passes our group and refuses anything that lea
  const t2=txns.map(x=>structuredClone(x));t2[3].note=new Uint8Array([1]);
  assert.match(flashLiquidationProblem(t2,args,algoIn,minOut)??'',/one group/);
  assert.equal(FALGO,971381860);
+});
+
+test('the first liquidation carries the fALGO opt-in, and only an exact zero opt-in to the wallet itself is accepted',()=>{
+ const {args,txns,algoIn,minOut}=group(true);
+ assert.equal(txns.length,13);assert.equal(txns[0].type,'axfer');assert.equal(txns[0].xaid,BigInt(FALGO));
+ assert.equal(flashLiquidationProblem(txns,args,algoIn,minOut),undefined);
+ const end=Number(BigInt('0x'+Buffer.from((txns[1].apaa as Uint8Array[])[2]).toString('hex')));
+ assert.equal(end,txns.length-1,'the flash loan still points at its end');
+ const tamper=(f:(t:Txn)=>void)=>{const t=txns.map(x=>structuredClone(x));f(t[0]);assignGroup(t);return t;};
+ assert.match(flashLiquidationProblem(tamper(t=>{t.aamt=5n;}),args,algoIn,minOut)??'',/asset transfer/);
+ assert.match(flashLiquidationProblem(tamper(t=>{t.xaid=123n;}),args,algoIn,minOut)??'',/asset transfer/);
+ assert.match(flashLiquidationProblem(txns,{...args,optIn:false},algoIn,minOut)??'',/asset transfer|flash loan/,'an opt-in that was not asked for is refused');
+});
+
+test('liquidation winnings top the fee float up without leaving the swap short of the flash repayment',()=>{
+ // 1 ALGO of proceeds quoted at 0.07 USDC, 0.05 USDC to repay: at most ~0.27 ALGO can be kept.
+ assert.equal(algoToKeep(1_000_000n,70_000n,50_000n,400_000n,400_000n),0n,'float already full');
+ assert.equal(algoToKeep(1_000_000n,70_000n,50_000n,350_000n,400_000n),50_000n,'tops up exactly');
+ const k=algoToKeep(1_000_000n,70_000n,50_000n,0n,400_000n);
+ assert.ok(k>0n&&k<1_000_000n-714_285n,`${k}`);
+ assert.ok((1_000_000n-k)*70_000n/1_000_000n>=50_000n*102n/100n,'the rest still swaps for the repayment with 2% to spare');
+ assert.equal(algoToKeep(1_000_000n,50_500n,50_000n,0n,400_000n),0n,'no room when the swap barely covers it');
 });

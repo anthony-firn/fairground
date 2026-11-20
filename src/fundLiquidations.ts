@@ -156,6 +156,8 @@ export interface FlashLiquidationArgs {
   repay: bigint; fWithdraw: bigint; budget: number;
   /** The liquidate call's minimum fALGO to the liquidator (at most fWithdraw). */
   minCollateral: bigint;
+  /** Opt the wallet in to fALGO as the group's first transaction (only the first liquidation needs it). */
+  optIn?: boolean;
 }
 /** One atomic group that needs no capital: flash-borrow USDC, liquidate an ALGO-collateral loan, withdraw the fALGO as
  * ALGO, swap it to USDC through the router (`router`: its prepared transactions for that ALGO, minimum output covering
@@ -176,10 +178,11 @@ export function flashLiquidationGroup(a: FlashLiquidationArgs, router: Txn[], p:
     ...router.map((t) => ({...t, fv, lv, grp: undefined, lx: undefined})),
     {...head(1000n), type: 'axfer', arcv: usdcPool, xaid: BigInt(USDC), aamt: flashRepayment(a.repay)},
   ];
-  const endIndex = BigInt(middle.length + 1);
+  const lead: Txn[] = a.optIn ? [{...head(1000n), type: 'axfer', arcv: addressKey(a.liquidator), xaid: BigInt(FALGO)}] : [];
+  const endIndex = BigInt(lead.length + middle.length + 1);
   const begin: Txn = {...head(2000n), type: 'appl', apid: FOLKS_USDC_POOL_APP, apaa: [FLASH_BEGIN, u64(a.repay), u64(endIndex), u8(0), u8(0)], apas: [BigInt(USDC)]};
   const end: Txn = {...head(2000n), type: 'appl', apid: FOLKS_USDC_POOL_APP, apaa: [FLASH_END, u8(1), u8(0)], apat: [addressKey(FOLKS_RESERVE)], apas: [BigInt(USDC)]};
-  const txns = [begin, ...middle, end];
+  const txns = [...lead, begin, ...middle, end];
   assignGroup(txns);
   return txns;
 }
@@ -192,7 +195,7 @@ export function flashLiquidationProblem(txns: Txn[], a: FlashLiquidationArgs, al
   const me = addressKey(a.liquidator), genesis = base64.decode('wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=');
   const allowedApps = new Set([FOLKS_USDC_POOL_APP, FOLKS_ALGO_POOL_APP, a.loanApp, FOLKS_ORACLE_ADAPTER, ROUTER_APP_ID, 1167143153n]);
   const usdcPool = addressKey(applicationAddress(FOLKS_USDC_POOL_APP)), algoPool = addressKey(applicationAddress(FOLKS_ALGO_POOL_APP)), router = addressKey(applicationAddress(ROUTER_APP_ID));
-  if (txns.length < 10 || txns.length > 16) return 'unexpected number of transactions';
+  if (txns.length < 10 || txns.length > 17) return 'unexpected number of transactions';
   let fees = 0n;
   for (const t of txns) {
     if (!same(t.snd, me)) return 'a transaction isn’t from this wallet';
@@ -202,7 +205,8 @@ export function flashLiquidationProblem(txns: Txn[], a: FlashLiquidationArgs, al
     if (t.type === 'appl' && (!allowedApps.has(t.apid as bigint) || t.apan !== undefined || t.apap !== undefined || t.apsu !== undefined)) return 'a call to an unexpected app';
     if (t.type === 'pay' && !(same(t.rcv, router) && t.amt === algoIn)) return 'an ALGO payment goes somewhere unexpected';
     if (t.type === 'axfer') {
-      const ok = (same(t.arcv, usdcPool) && t.xaid === BigInt(USDC) && (t.aamt === a.repay || t.aamt === flashRepayment(a.repay)))
+      const ok = (a.optIn === true && t === txns[0] && same(t.arcv, me) && t.xaid === BigInt(FALGO) && (t.aamt === undefined || t.aamt === 0n))
+        || (same(t.arcv, usdcPool) && t.xaid === BigInt(USDC) && (t.aamt === a.repay || t.aamt === flashRepayment(a.repay)))
         || (same(t.arcv, algoPool) && t.xaid === BigInt(FALGO) && t.aamt === a.fWithdraw);
       if (!ok) return 'an asset transfer goes somewhere unexpected';
     }
@@ -213,7 +217,7 @@ export function flashLiquidationProblem(txns: Txn[], a: FlashLiquidationArgs, al
   const copy = txns.map((x) => ({...x}));
   assignGroup(copy);
   if (!same(copy[0].grp, txns[0].grp as Uint8Array)) return 'the transactions aren’t one group';
-  const [begin, end] = [txns[0], txns[txns.length - 1]];
+  const [begin, end] = [txns[a.optIn ? 1 : 0], txns[txns.length - 1]];
   if (begin.apid !== FOLKS_USDC_POOL_APP || hex((begin.apaa as Uint8Array[])[0]) !== hex(FLASH_BEGIN) || hex((begin.apaa as Uint8Array[])[1]) !== hex(u64(a.repay))
     || hex((begin.apaa as Uint8Array[])[2]) !== hex(u64(BigInt(txns.length - 1)))) return 'the flash loan doesn’t borrow the repayment or point at its end';
   if (end.apid !== FOLKS_USDC_POOL_APP || hex((end.apaa as Uint8Array[])[0]) !== hex(FLASH_END)) return 'the group doesn’t end by repaying the flash loan';
@@ -229,3 +233,13 @@ export function flashLiquidationProblem(txns: Txn[], a: FlashLiquidationArgs, al
  * (0.74% of the total at an 8% bonus and 10% fee; measured in simulation 2026-11-20). */
 export const liquidatorShare = (gross: bigint, bonus: bigint, fee: bigint): bigint =>
   (gross * (10_000n * (10_000n + bonus) - fee * bonus)) / (10_000n * (10_000n + bonus));
+
+/** ALGO to keep from a liquidation's `algoTotal` proceeds so the wallet's spare ALGO (`spareAfter` once fees are paid)
+ * comes back up to `target` for later fees. It never keeps so much that the rest, at the full-size quote's rate
+ * (`minOutFull` USDC), would fall within 2% of the flash repayment `need`; the smaller swap is quoted and checked again. */
+export function algoToKeep(algoTotal: bigint, minOutFull: bigint, need: bigint, spareAfter: bigint, target: bigint): bigint {
+  if (minOutFull <= 0n || spareAfter >= target) return 0n;
+  const room = algoTotal - ((algoTotal * need * 102n) / (minOutFull * 100n) + 1n);
+  if (room <= 0n) return 0n;
+  return target - spareAfter < room ? target - spareAfter : room;
+}
