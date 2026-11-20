@@ -88,10 +88,11 @@ async function preparePlan(state: WalletState, from: number, to: number, amount:
   return plan;
 }
 
-export async function prepareWalletConversion(state: WalletState, fetchImpl: typeof fetch = (...args)=>fetch(...args), api?: string, now = Date.now()): Promise<WalletConversion> {
+/** Converts `amount` micro-ALGO (by default all that the reserve policy allows) to USDC. */
+export async function prepareWalletConversion(state: WalletState, fetchImpl: typeof fetch = (...args)=>fetch(...args), api?: string, now = Date.now(), amount = convertibleOnRequest(state)): Promise<WalletConversion> {
   const signer=walletSignerProblem(state);if(signer)throw Error(signer);
-  const amount=convertibleOnRequest(state);
-  if (!amount) throw Error('No ALGO is available above the account minimum and fee reserve.');
+  if (amount<=0n) throw Error('No ALGO is available above the account minimum and fee reserve.');
+  if (amount>convertibleOnRequest(state)) throw Error('That is more ALGO than the reserve policy allows converting.');
   return preparePlan(state,0,USDC_ASSET_ID,amount,fetchImpl,api,now);
 }
 

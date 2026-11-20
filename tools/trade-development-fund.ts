@@ -18,7 +18,7 @@ import {DEVELOPMENT_ADDRESS} from '../src/defaults.ts';
 import {walletKeys,walletState} from '../src/wallet.ts';
 import {convertibleOnRequest,prepareWalletBuy,prepareWalletConversion,walletSignerProblem,type WalletConversion} from '../src/walletConversion.ts';
 import {executeWalletConversion,resumeWalletConversion,type ConversionJournal,type ConversionStore} from '../src/conversionSession.ts';
-import {DIP_RULE,decide,dipSignal,quotePriceProblem,type Action} from '../src/fundTrader.ts';
+import {DIP_RULE,decide,dipSignal,fittingPlan,quotePriceProblem,MIN_BUY_USDC,MIN_SWEEP_ALGO,type Action} from '../src/fundTrader.ts';
 
 const uid=process.getuid?.();if(uid===undefined)throw Error('The local operator utility requires a Unix user ID');
 const dir=join(homedir(),'.local/share/evolve-bootstrap/treasury');
@@ -122,7 +122,7 @@ async function tick(live:boolean){
  const closes=await hourlyCloses();
  const signal=dipSignal(closes,trader.inTrade);
  const convertible=convertibleOnRequest(state);
- const action:Action=decide(signal.signal,trader.inTrade,state.usdc,convertible);
+ const action:Action=decide(signal.signal,trader.inTrade,state.usdc,convertible,signal.below);
  const paused=await access(join(dir,'PAUSE')).then(()=>true,()=>false);
  const valueUsd=Number(state.usdc)/1e6+Number(state.algo)/1e6*signal.price;
  await write(join(dir,'status.json'),{checkedAt:new Date().toISOString(),live,paused,inTrade:trader.inTrade,entryPrice:trader.entryPrice,
@@ -135,11 +135,13 @@ async function tick(live:boolean){
  }
  if(action.kind==='flat'){trader.inTrade=false;delete trader.entryPrice;delete trader.entryAt;await write(traderPath,trader);console.log('Position closed: nothing above the reserve to sell.');return;}
  if(action.kind==='wait')return;
- const what=action.kind==='buy'?`buy ALGO with ${Number(action.usdc)/1e6} USDC`:`sell ${Number(convertible)/1e6} ALGO (${action.reason})`;
+ const what=action.kind==='buy'?`buy ALGO with up to ${Number(action.usdc)/1e6} USDC`:`sell up to ${Number(convertible)/1e6} ALGO (${action.reason})`;
  if(paused){console.log('Paused; would',what);return;}
  if(!live){console.log('Dry run; would',what,`at $${signal.price} (average $${signal.average.toFixed(5)})`);return;}
  const spot=await spotPrice();
- const plan:WalletConversion=action.kind==='buy'?await prepareWalletBuy(state,action.usdc):await prepareWalletConversion(state);
+ const plan:WalletConversion=action.kind==='buy'
+  ?await fittingPlan(amount=>prepareWalletBuy(state,amount),action.usdc,MIN_BUY_USDC)
+  :await fittingPlan(amount=>prepareWalletConversion(state,undefined,undefined,undefined,amount),convertible,action.reason==='exit'?1n:MIN_SWEEP_ALGO);
  const gap=quotePriceProblem(plan,spot);if(gap)throw Error(gap);
  const owner=await privateJson(join(homedir(),'.config/fairground/anthony-firn.json')) as {nostrKey?:string};
  if(!/^[a-fA-F0-9]{64}$/.test(owner.nostrKey??''))throw Error('Local owner account has an unsupported key format');
@@ -151,7 +153,7 @@ async function tick(live:boolean){
   if(settleIntent(trader,receipt,spot))await write(traderPath,trader);
   await log('trades.jsonl',{at:new Date().toISOString(),kind:action.kind==='buy'?'buy':action.reason,phase:receipt.phase,txid:receipt.txids[0],
    from:plan.quote.from,input:String(plan.quote.amount),expected:String(plan.quote.quote),fees:String(plan.fees),spot,average:signal.average});
-  console.log('Trade:',what,receipt.phase,receipt.txids[0]);
+  console.log('Trade:',action.kind==='buy'?'buy':action.reason,Number(plan.quote.amount)/1e6,action.kind==='buy'?'USDC':'ALGO',receipt.phase,receipt.txids[0]);
  }finally{keys.seed.fill(0);}
 }
 

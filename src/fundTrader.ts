@@ -24,14 +24,15 @@ export const MAX_QUOTE_GAP = 0.03;
 export type Signal = 'buy' | 'sell' | 'wait';
 
 /** `closes`: completed hourly USD closes, oldest first. The latest is compared with the average of the hours before it. */
-export function dipSignal(closes: number[], inTrade: boolean, rule: DipRule = DIP_RULE): {signal: Signal; price: number; average: number} {
+export function dipSignal(closes: number[], inTrade: boolean, rule: DipRule = DIP_RULE): {signal: Signal; price: number; average: number; below: boolean} {
   if (closes.length < rule.hours + 1) throw Error(`Need ${rule.hours + 1} hourly closes, got ${closes.length}`);
   if (closes.some((c) => !Number.isFinite(c) || c <= 0)) throw Error('Invalid price history');
   const price = closes[closes.length - 1];
   const window = closes.slice(-rule.hours - 1, -1);
   const average = window.reduce((a, b) => a + b, 0) / window.length;
-  const signal: Signal = inTrade ? (price >= average ? 'sell' : 'wait') : price < average * (1 - rule.drop) ? 'buy' : 'wait';
-  return {signal, price, average};
+  const below = price < average * (1 - rule.drop);
+  const signal: Signal = inTrade ? (price >= average ? 'sell' : 'wait') : below ? 'buy' : 'wait';
+  return {signal, price, average, below};
 }
 
 export type Action =
@@ -40,10 +41,12 @@ export type Action =
   | {kind: 'flat'}
   | {kind: 'wait'; reason: string};
 
-/** What to do now. `convertible` is the ALGO the reviewed conversion policy allows selling (above reserve and fees). */
-export function decide(signal: Signal, inTrade: boolean, usdc: bigint, convertible: bigint): Action {
+/** What to do now. `convertible` is the ALGO the reviewed conversion policy allows selling (above reserve and fees).
+ * `below`: the price is still in the buy zone, so USDC left over from a buy split into pieces is spent too. */
+export function decide(signal: Signal, inTrade: boolean, usdc: bigint, convertible: bigint, below = false): Action {
   if (inTrade) {
-    if (signal !== 'sell') return {kind: 'wait', reason: 'holding ALGO until the price is back at its average'};
+    if (signal !== 'sell') return below && usdc >= MIN_BUY_USDC ? {kind: 'buy', usdc}
+      : {kind: 'wait', reason: 'holding ALGO until the price is back at its average'};
     return convertible > 0n ? {kind: 'sell', reason: 'exit'} : {kind: 'flat'};
   }
   if (signal === 'buy' && usdc >= MIN_BUY_USDC) return {kind: 'buy', usdc};
@@ -59,4 +62,17 @@ export function quotePriceProblem(plan: Pick<WalletConversion, 'quote'>, referen
     : from === USDC_ASSET_ID && to === 0 ? Number(amount) / Number(quote) : NaN;
   if (!Number.isFinite(implied) || implied <= 0) return 'The quote does not price ALGO against USDC.';
   if (Math.abs(implied / reference - 1) > MAX_QUOTE_GAP) return `The router price $${implied.toFixed(5)} is more than ${MAX_QUOTE_GAP * 100}% from the exchange price $${reference.toFixed(5)}.`;
+}
+
+/** The router prices larger trades over more pools; when its network fees exceed the reviewed limit, try half as much.
+ * The rest is traded on the next checks. Only preparing is retried here; nothing is signed. */
+export async function fittingPlan(build: (amount: bigint) => Promise<WalletConversion>, full: bigint, min: bigint): Promise<WalletConversion> {
+  for (let amount = full; amount >= min && amount > 0n; amount /= 2n) {
+    try {
+      return await build(amount);
+    } catch (error) {
+      if (!/network fees are too high/.test((error as Error).message)) throw error;
+    }
+  }
+  throw Error('Router network fees exceed the limit even for the smallest trade.');
 }

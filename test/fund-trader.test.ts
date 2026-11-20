@@ -7,7 +7,7 @@ import {applicationAddress} from '../src/algotx.ts';
 import {USDC_ASSET_ID} from '../src/rails/algorand.ts';
 import {buyProblem,conversionProblem,prepareWalletBuy,prepareWalletConversion,tradeProblem,BUY_FEE_FLOOR} from '../src/walletConversion.ts';
 import {executeWalletConversion,resumeWalletConversion,type ConversionJournal,type ConversionStore} from '../src/conversionSession.ts';
-import {DIP_RULE,decide,dipSignal,quotePriceProblem,MIN_BUY_USDC,MIN_SWEEP_ALGO} from '../src/fundTrader.ts';
+import {DIP_RULE,decide,dipSignal,fittingPlan,quotePriceProblem,MIN_BUY_USDC,MIN_SWEEP_ALGO} from '../src/fundTrader.ts';
 import {ALGOD,createFakeChain,createFakeRouter} from './fakechain.ts';
 
 const flat=(n:number,v:number)=>Array.from({length:n},()=>v);
@@ -78,4 +78,32 @@ test('buys use the same durable journal: resume never submits a second trade',as
  assert.equal((await resumeWalletConversion(keys.address,store,{algod:ALGOD,fetch:f})).phase,'confirmed');assert.equal(posts,1);
  await assert.rejects(resumeWalletConversion(keys.address,{read:async()=>({...saved!,from:5}),write:async()=>{}},{algod:ALGOD,fetch:f}),/Invalid saved/);
  await assert.rejects(resumeWalletConversion(keys.address,{read:async()=>({...saved!,from:undefined}),write:async()=>{}},{algod:ALGOD,fetch:f}),/invalid|Invalid/,'a buy cannot be replayed as a sell');
+});
+
+test('an open position spends USDC left over from a split buy while the price stays in the buy zone',()=>{
+ assert.deepEqual(decide('wait',true,MIN_BUY_USDC,0n,true),{kind:'buy',usdc:MIN_BUY_USDC});
+ assert.equal(decide('wait',true,MIN_BUY_USDC,0n,false).kind,'wait');
+ assert.equal(decide('wait',true,MIN_BUY_USDC-1n,0n,true).kind,'wait');
+ const base=flat(DIP_RULE.hours,0.10);
+ assert.equal(dipSignal([...base,0.07],true).below,true);assert.equal(dipSignal([...base,0.09],true).below,false);
+});
+
+test('trades too large for the router fee limit are prepared in halves; other errors are not retried',async()=>{
+ const tried:bigint[]=[];
+ const build=async(amount:bigint)=>{tried.push(amount);if(amount>9_000_000n)throw Error('network fees are too high');return {amount} as never;};
+ assert.deepEqual(await fittingPlan(build,19_980_000n,1_000_000n),{amount:4_995_000n});
+ assert.deepEqual(tried,[19_980_000n,9_990_000n,4_995_000n]);
+ await assert.rejects(fittingPlan(build,19_980_000n,12_000_000n),/smallest trade/);
+ let calls=0;
+ await assert.rejects(fittingPlan(async()=>{calls++;throw Error('the wallet changed');},20_000_000n,1n),/wallet changed/);
+ assert.equal(calls,1);
+});
+
+test('a partial conversion sells only the requested ALGO and never more than the reserve policy allows',async()=>{
+ const router=createFakeRouter(),keys=walletKeys(generateSecretKey());
+ const state={address:keys.address,algo:20_520_000n,minimum:200000n,usdc:0n,active:true};
+ const part=await prepareWalletConversion(state,router.fetch,router.api,1000,5_000_000n);
+ assert.equal(part.quote.amount,5_000_000n);assert.equal(conversionProblem(part,state,1001),undefined);
+ await assert.rejects(prepareWalletConversion(state,router.fetch,router.api,1000,20_000_001n),/reserve policy/);
+ await assert.rejects(prepareWalletConversion(state,router.fetch,router.api,1000,0n),/No ALGO/);
 });
