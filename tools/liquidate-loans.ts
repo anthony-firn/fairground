@@ -17,7 +17,7 @@ import {confirmed,DEFAULT_ALGOD,submit,suggestedParams,walletKeys,walletState,ty
 import {decodeTxn,encodeTxn,signTxn,txid} from '../src/algotx.ts';
 import {simulate} from '../src/fundLending.ts';
 import {minReceive,prepareSwap,quoteSwap} from '../src/swap.ts';
-import {FALGO,FOLKS_ALGO_POOL_APP,algoToKeep,FOLKS_LOANS,FOLKS_ORACLE_0,USD,USDC,assessLoan,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,
+import {FALGO,FOLKS_ALGO_POOL_APP,algoToKeep,blockedAssets,FOLKS_LOANS,FOLKS_ORACLE_0,USD,USDC,assessLoan,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,
  liquidatorShare,parseLoanLocal,parseLoanTerms,parseOracle,parsePoolIndexes,type KV,type LoanLocal,type PoolTerms} from '../src/fundLiquidations.ts';
 
 const IDX='https://mainnet-idx.4160.nodely.dev',PM=971350278n,LOAN=FOLKS_LOANS.general;
@@ -74,12 +74,13 @@ async function tick(live:boolean){
  if(Date.now()-loansAt>60_000)await refreshLoans();
  const [pools,prices]=await Promise.all([gs(PM).then(s=>parsePoolIndexes(s,now)),gs(FOLKS_ORACLE_0).then(parseOracle)]);
  const algoPrice=prices.get(0n)!.price,dii=pools.get(FOLKS_ALGO_POOL_APP)!.depositIndex,algoTerms=terms.get(FOLKS_ALGO_POOL_APP)!;
- const cands:Candidate[]=[];
+ const cands:Candidate[]=[];let blocked=0;
  for(const [escrow,local] of loans){
   if((failedAt.get(escrow)??0)>Date.now()-300_000)continue;
   const h=assessLoan(local,terms,pools,prices,now);if(!h.liquidatable)continue;
   const usdcDebt=h.borrows.find(b=>b.asset===BigInt(USDC)),algoCol=h.collateral.find(c=>c.asset===0n);if(!usdcDebt||!algoCol)continue;
   const best=bestLiquidation({...h,borrows:[usdcDebt],collateral:[algoCol]},terms);if(!best||best.repay<=0n)continue;
+  if(blockedAssets(prices,[...h.collateral.map(c=>c.asset),...h.borrows.map(b=>b.asset)],now).length){blocked++;continue;}
   // Just under the largest allowed repayment (the contract rounds its maximum down), capped at $1,000 a group.
   const repay=[best.repay*99n/100n,1_000_000_000n].reduce((a,b)=>a<b?a:b);
   const seizedValue=(repay*USD/1_000_000n)*(10_000n+algoTerms.liquidationBonus)/10_000n;
@@ -91,7 +92,7 @@ async function tick(live:boolean){
  cands.sort((a,b)=>b.expectedProfitUsd-a.expectedProfitUsd);
  const feeUsd=Number(FEE_ESTIMATE)/1e6*Number(algoPrice)/1e8;
  const worth=cands.filter(c=>c.expectedProfitUsd-feeUsd>=MIN_PROFIT_USD);
- await writeFile(join(dir,'executor-status.json'),JSON.stringify({checkedAt:new Date().toISOString(),live,loans:loans.size,candidates:cands.length,worth:worth.length,
+ await writeFile(join(dir,'executor-status.json'),JSON.stringify({checkedAt:new Date().toISOString(),live,loans:loans.size,candidates:cands.length,blockedByStalePrices:blocked,worth:worth.length,
   top:worth.slice(0,5).map(c=>({escrow:c.escrow,repayUsdc:Number(c.repay)/1e6,expectedProfitUsd:Number(c.expectedProfitUsd.toFixed(4))}))},null,1),{mode:0o600});
  const paused=await access(join(treasury,'PAUSE')).then(()=>true,()=>false);
  if(!worth.length)return;

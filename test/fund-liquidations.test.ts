@@ -5,7 +5,7 @@ import {generateSecretKey} from 'nostr-tools/pure';
 import {addressKey,applicationAddress,assignGroup,type Txn} from '../src/algotx.ts';
 import {walletKeys} from '../src/wallet.ts';
 import {MAINNET_GENESIS_HASH} from '../src/rails/algorand.ts';
-import {FALGO,FOLKS_LOANS,USDC,algoToKeep,assessLoan,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,liquidatorShare,
+import {FALGO,FOLKS_LOANS,USDC,algoToKeep,assessLoan,blockedAssets,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,liquidatorShare,
  parseLoanLocal,parseLoanTerms,parseOracle,parsePoolIndexes,type KV} from '../src/fundLiquidations.ts';
 
 const me=walletKeys(generateSecretKey()).address,escrow=walletKeys(generateSecretKey()).address;
@@ -96,4 +96,10 @@ test('liquidation winnings top the fee float up without leaving the swap short o
  assert.ok(k>0n&&k<1_000_000n-714_285n,`${k}`);
  assert.ok((1_000_000n-k)*70_000n/1_000_000n>=50_000n*102n/100n,'the rest still swaps for the repayment with 2% to spare');
  assert.equal(algoToKeep(1_000_000n,50_500n,50_000n,0n,400_000n),0n,'no room when the swap barely covers it');
+});
+
+test('loans touching an asset with a zero or stale oracle price are recognised as unliquidatable',()=>{
+ const now=1_795_217_348n,prices=new Map([[0n,{price:7_350_336n,updated:now-10n}],[287867876n,{price:0n,updated:now-18_170_000n}],[227855942n,{price:109_577_679n,updated:now-7200n}]]);
+ assert.deepEqual(blockedAssets(prices,[0n],now),[]);
+ assert.deepEqual(blockedAssets(prices,[0n,287867876n,227855942n,999n],now),[287867876n,227855942n,999n]);
 });

@@ -243,3 +243,10 @@ export function algoToKeep(algoTotal: bigint, minOutFull: bigint, need: bigint, 
   if (room <= 0n) return 0n;
   return target - spareAfter < room ? target - spareAfter : room;
 }
+
+/** Assets whose price the oracle adapter would refuse (zero, or not updated for `maxAgeSeconds`): any loan touching one
+ * cannot be liquidated by anyone (2026-11-20: OPUL reads $0 and was last updated ~7 months ago, which blocks loans
+ * whose OPUL debt is dust). */
+export function blockedAssets(prices: Map<bigint, {price: bigint; updated: bigint}>, assets: bigint[], now: bigint, maxAgeSeconds = 3600n): bigint[] {
+  return assets.filter((a) => { const p = prices.get(a); return !p || p.price === 0n || now - p.updated > maxAgeSeconds; });
+}
