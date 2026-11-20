@@ -1,19 +1,23 @@
 /**
  * The development fund's trading rule. The fund waits in USDC. When ALGO's latest hourly close falls 20% below its
- * 20-day average it buys ALGO with all of its USDC, and sells everything above the ALGO reserve once the price is back
+ * 14-day average it buys ALGO with all of its USDC, and sells everything above the ALGO reserve once the price is back
  * at the average. Mined ALGO that arrives while the fund is waiting is converted to USDC, as before.
  *
- * Why this rule: on two years of hourly ALGO prices with measured Folks Router costs (about 0.55% per swap plus
- * ~0.013 ALGO network fees), parameters were ranked on the first year and checked on the second. Faster rules
- * (shorter averages, shallower dips, moving-average trend following) won the first year and lost the second; this one
- * beat holding USDC in both. On daily prices since 2021 the same rule beat USDC lending in about 80% of one-year windows.
- * Its edge is small and it trades a few times a year. Past prices do not guarantee it keeps working.
+ * Evidence (tools/backtest-development-fund.ts, 2026-11-20, hourly ALGO since 2019 with measured costs and price impact):
+ * dip-buying beat holding USDC across unseen years, walk-forward periods, BTC/ETH/SOL/DOGE and simulated years; trend
+ * following, RSI, rebalancing and re-picking whatever worked lately all lost. The 14-day average did better than the
+ * 20-day one first used (Nov 2026) in most of those checks. Round trips win often but the worst lost 46%; the
+ * growth-optimal stake was about all of the USDC, so the trader never borrows. Past prices do not guarantee results.
  */
 import {USDC_ASSET_ID} from './rails/algorand.ts';
 import type {WalletConversion} from './walletConversion.ts';
 
 export interface DipRule { hours: number; drop: number }
-export const DIP_RULE: DipRule = {hours: 480, drop: 0.2};
+export const DIP_RULE: DipRule = {hours: 336, drop: 0.2};
+/** Network fee limit for the fund's swaps. The app's 20,000 µALGO split larger trades into ~9 ALGO pieces, at most one
+ * per 5-minute check, which in backtests lost most of the rule's edge once the fund held a few hundred ALGO. The
+ * router has quoted up to ~56,000 for large trades; 100,000 µALGO is under $0.01 at today's price. */
+export const FUND_FEE_CAP = 100_000n;
 /** Smallest buy: below this the ~0.013 ALGO network fee is over 5% of the trade. */
 export const MIN_BUY_USDC = 20_000n;
 /** Mined ALGO is swept to USDC from 1 ALGO, the conversion service's existing threshold. */

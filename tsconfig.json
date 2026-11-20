@@ -25,6 +25,7 @@
     "tools/local-pilot.ts",
     "tools/opt-in-development-wallet.ts",
     "tools/settle-development-fund.ts",
-    "tools/trade-development-fund.ts"
+    "tools/trade-development-fund.ts",
+    "tools/backtest-development-fund.ts"
   ]
 }

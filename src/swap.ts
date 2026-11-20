@@ -62,7 +62,7 @@ const uint64 = (b: unknown) => (b instanceof Uint8Array && b.length === 8 ? b.re
 const same = (a: unknown, b: Uint8Array) => a instanceof Uint8Array && a.length === b.length && a.every((x, i) => x === b[i]);
 
 /** Why the router's transactions shouldn't be signed, or undefined if they do exactly what was asked. */
-export function swapProblem(raw: Uint8Array[], user: string, q: SwapQuote): string | undefined {
+export function swapProblem(raw: Uint8Array[], user: string, q: SwapQuote, maxFees = MAX_SWAP_FEES): string | undefined {
   if (raw.length < 2 || raw.length > 16) return 'unexpected number of transactions';
   let txns: Txn[];
   try {
@@ -80,7 +80,7 @@ export function swapProblem(raw: Uint8Array[], user: string, q: SwapQuote): stri
     if (!(group instanceof Uint8Array) || !same(t.grp, group)) return 'the transactions aren’t one group';
     fees += typeof t.fee === 'bigint' ? t.fee : 0n;
   }
-  if (fees > MAX_SWAP_FEES) return 'network fees are too high';
+  if (fees > maxFees) return 'network fees are too high';
   const [first, ...rest] = txns;
   const last = rest.pop()!;
   const sends = q.from === 0

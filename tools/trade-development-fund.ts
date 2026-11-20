@@ -18,7 +18,7 @@ import {DEVELOPMENT_ADDRESS} from '../src/defaults.ts';
 import {walletKeys,walletState} from '../src/wallet.ts';
 import {convertibleOnRequest,prepareWalletBuy,prepareWalletConversion,walletSignerProblem,type WalletConversion} from '../src/walletConversion.ts';
 import {executeWalletConversion,resumeWalletConversion,type ConversionJournal,type ConversionStore} from '../src/conversionSession.ts';
-import {DIP_RULE,decide,dipSignal,fittingPlan,quotePriceProblem,MIN_BUY_USDC,MIN_SWEEP_ALGO,type Action} from '../src/fundTrader.ts';
+import {DIP_RULE,decide,dipSignal,fittingPlan,quotePriceProblem,FUND_FEE_CAP,MIN_BUY_USDC,MIN_SWEEP_ALGO,type Action} from '../src/fundTrader.ts';
 
 const uid=process.getuid?.();if(uid===undefined)throw Error('The local operator utility requires a Unix user ID');
 const dir=join(homedir(),'.local/share/evolve-bootstrap/treasury');
@@ -121,7 +121,7 @@ async function tick(live:boolean){
  const signer=walletSignerProblem(state);if(signer)throw Error(signer);
  const closes=await hourlyCloses();
  const signal=dipSignal(closes,trader.inTrade);
- const convertible=convertibleOnRequest(state);
+ const convertible=convertibleOnRequest(state,FUND_FEE_CAP);
  const action:Action=decide(signal.signal,trader.inTrade,state.usdc,convertible,signal.below);
  const paused=await access(join(dir,'PAUSE')).then(()=>true,()=>false);
  const valueUsd=Number(state.usdc)/1e6+Number(state.algo)/1e6*signal.price;
@@ -140,8 +140,8 @@ async function tick(live:boolean){
  if(!live){console.log('Dry run; would',what,`at $${signal.price} (average $${signal.average.toFixed(5)})`);return;}
  const spot=await spotPrice();
  const plan:WalletConversion=action.kind==='buy'
-  ?await fittingPlan(amount=>prepareWalletBuy(state,amount),action.usdc,MIN_BUY_USDC)
-  :await fittingPlan(amount=>prepareWalletConversion(state,undefined,undefined,undefined,amount),convertible,action.reason==='exit'?1n:MIN_SWEEP_ALGO);
+  ?await fittingPlan(amount=>prepareWalletBuy(state,amount,undefined,undefined,undefined,FUND_FEE_CAP),action.usdc,MIN_BUY_USDC)
+  :await fittingPlan(amount=>prepareWalletConversion(state,undefined,undefined,undefined,amount,FUND_FEE_CAP),convertible,action.reason==='exit'?1n:MIN_SWEEP_ALGO);
  const gap=quotePriceProblem(plan,spot);if(gap)throw Error(gap);
  const owner=await privateJson(join(homedir(),'.config/fairground/anthony-firn.json')) as {nostrKey?:string};
  if(!/^[a-fA-F0-9]{64}$/.test(owner.nostrKey??''))throw Error('Local owner account has an unsupported key format');
@@ -158,7 +158,7 @@ async function tick(live:boolean){
 }
 
 const live=process.argv.includes('--live'),once=process.argv.includes('--once');
-console.log(`Fund trader ${live?'LIVE':'dry run'}: buy below ${(1-DIP_RULE.drop)*100}% of the ${DIP_RULE.hours}-hour average, sell at the average.`);
+console.log(`Fund trader ${live?'LIVE':'dry run'}: buy below ${(1-DIP_RULE.drop)*100}% of the ${DIP_RULE.hours}-hour average, sell at the average; network fees up to ${FUND_FEE_CAP} µALGO.`);
 do{
  try{await tick(live);}catch(error){console.error('Trader deferred:',(error as Error).message);if(once)process.exitCode=1;}
  if(!once)await new Promise(resolve=>setTimeout(resolve,300000));

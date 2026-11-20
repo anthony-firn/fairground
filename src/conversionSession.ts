@@ -13,6 +13,8 @@ export interface ConversionJournal {
   input: string; expected: string; minimum: string; fees: string; reserve: string; round?: number;
   /** USDC_ASSET_ID for a USDC-to-ALGO buy; absent for an ALGO-to-USDC conversion. */
   from?: number;
+  /** The network fee limit the group was checked against, when not the default. */
+  feeCap?: string;
 }
 export interface ConversionStore {
   read(): Promise<ConversionJournal|null>;
@@ -40,7 +42,8 @@ function checkedSigned(j:ConversionJournal,address:string):Uint8Array[]{
   });
   const reserve=BigInt(j.reserve),fees=BigInt(j.fees),amount=BigInt(j.input),now=Date.now();
   const from=j.from??0;if(from!==0&&from!==USDC_ASSET_ID)throw Error('Invalid saved conversion.');
-  const plan:WalletConversion={address,raw,fees,reserve,expiresAt:now+30000,quote:{from,to:from?0:USDC_ASSET_ID,amount,quote:BigInt(j.expected),fees,priceImpact:0,payload:''}};
+  if(j.feeCap!==undefined&&!/^[1-9][0-9]{0,8}$/.test(j.feeCap))throw Error('Invalid saved conversion.');
+  const plan:WalletConversion={address,raw,fees,reserve,expiresAt:now+30000,quote:{from,to:from?0:USDC_ASSET_ID,amount,quote:BigInt(j.expected),fees,priceImpact:0,payload:''},...(j.feeCap?{feeCap:BigInt(j.feeCap)}:{})};
   // A balance that satisfied the policy when the group was signed; the signed bytes themselves are rechecked in full.
   const state=from?{address,active:true,algo:reserve+fees,minimum:reserve-300000n,usdc:amount}:{address,active:true,algo:amount+fees+reserve,minimum:reserve-300000n,usdc:0n};
   const problem=tradeProblem(plan,state,now);
@@ -97,7 +100,7 @@ export async function executeWalletConversion(keys:WalletKeys,plan:WalletConvers
   const lastValid=String(decodeTxn(plan.raw[0]).lv);
   const journal:ConversionJournal={version:1,address:keys.address,phase:'prepared',txids:ids,signed:signed.map(s=>base64.encode(s)),createdAt:n.now(),lastValid,
     input:String(plan.quote.amount),expected:String(plan.quote.quote),minimum:String(minReceive(plan.quote)),fees:String(plan.fees),reserve:String(plan.reserve),
-    ...(plan.quote.from?{from:plan.quote.from}:{})};
+    ...(plan.quote.from?{from:plan.quote.from}:{}),...(plan.feeCap!==undefined?{feeCap:String(plan.feeCap)}:{})};
   // A storage/quota failure must happen before any signed bytes leave this device.
   await store.write(journal);
   return resumeWalletConversion(keys.address,store,network);

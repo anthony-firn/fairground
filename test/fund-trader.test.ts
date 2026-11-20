@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {generateSecretKey} from 'nostr-tools/pure';
 import {walletKeys,walletState,submit,confirmed} from '../src/wallet.ts';
-import {signSwap,minReceive,ROUTER_APP} from '../src/swap.ts';
+import {signSwap,minReceive,ROUTER_APP,MAX_SWAP_FEES} from '../src/swap.ts';
+import {decodeTxn,encodeTxn,assignGroup} from '../src/algotx.ts';
 import {applicationAddress} from '../src/algotx.ts';
 import {USDC_ASSET_ID} from '../src/rails/algorand.ts';
-import {buyProblem,conversionProblem,prepareWalletBuy,prepareWalletConversion,tradeProblem,BUY_FEE_FLOOR} from '../src/walletConversion.ts';
+import {buyProblem,conversionProblem,prepareWalletBuy,prepareWalletConversion,tradeProblem,BUY_FEE_FLOOR,MAX_FEE_CAP} from '../src/walletConversion.ts';
 import {executeWalletConversion,resumeWalletConversion,type ConversionJournal,type ConversionStore} from '../src/conversionSession.ts';
-import {DIP_RULE,decide,dipSignal,fittingPlan,quotePriceProblem,MIN_BUY_USDC,MIN_SWEEP_ALGO} from '../src/fundTrader.ts';
+import {DIP_RULE,decide,dipSignal,fittingPlan,quotePriceProblem,FUND_FEE_CAP,MIN_BUY_USDC,MIN_SWEEP_ALGO} from '../src/fundTrader.ts';
 import {ALGOD,createFakeChain,createFakeRouter} from './fakechain.ts';
 
 const flat=(n:number,v:number)=>Array.from({length:n},()=>v);
@@ -18,8 +19,8 @@ test('the dip rule buys 20% below the 20-day average and sells back at the avera
  assert.equal(dipSignal([...base,0.0801],false).signal,'wait');
  assert.equal(dipSignal([...base,0.0999],true).signal,'wait');
  assert.equal(dipSignal([...base,0.1001],true).signal,'sell');
- const s=dipSignal([0.5,...base,0.09],false);assert.ok(Math.abs(s.average-0.10)<1e-12,'only the last 480 hours count');assert.equal(s.price,0.09);
- assert.throws(()=>dipSignal(base,false),/480|481/);
+ const s=dipSignal([0.5,...base,0.09],false);assert.ok(Math.abs(s.average-0.10)<1e-12,'only the rule’s window counts');assert.equal(s.price,0.09);
+ assert.throws(()=>dipSignal(base,false),new RegExp(String(DIP_RULE.hours+1)));
  assert.throws(()=>dipSignal([...base.slice(1),NaN,0.1],false),/Invalid/);
 });
 
@@ -106,4 +107,29 @@ test('a partial conversion sells only the requested ALGO and never more than the
  assert.equal(part.quote.amount,5_000_000n);assert.equal(conversionProblem(part,state,1001),undefined);
  await assert.rejects(prepareWalletConversion(state,router.fetch,router.api,1000,20_000_001n),/reserve policy/);
  await assert.rejects(prepareWalletConversion(state,router.fetch,router.api,1000,0n),/No ALGO/);
+});
+
+test('the fund’s higher fee limit is per trade, bounded, and saved with the signed trade',async()=>{
+ // A router whose groups carry 60,000 µALGO of fees: over the app's limit, under the fund's.
+ const base=createFakeRouter();
+ const routerFetch:typeof fetch=async(input,init)=>{
+  const r=await base.fetch(input,init);if(!String(input).includes('/prepare/swap'))return r;
+  const body=await r.json() as {result:string[]};
+  const txns=body.result.map(b=>decodeTxn(Buffer.from(b,'base64')));txns[1].fee=59_000n;assignGroup(txns);
+  return Response.json({success:true,result:txns.map(t=>Buffer.from(encodeTxn(t)).toString('base64'))});
+ };
+ const {chain,keys,state}=await buyFixture();
+ await assert.rejects(prepareWalletBuy(state,state.usdc,routerFetch,base.api,1000),/network fees are too high/);
+ const plan=await prepareWalletBuy(state,state.usdc,routerFetch,base.api,1000,FUND_FEE_CAP);
+ assert.equal(plan.feeCap,FUND_FEE_CAP);assert.equal(buyProblem(plan,state,1001),undefined);
+ assert.match(buyProblem({...plan,feeCap:undefined},state,1001)??'',/network fees are too high/);
+ assert.match(buyProblem({...plan,feeCap:MAX_FEE_CAP+1n},state,1001)??'',/out of range/);
+ assert.ok(FUND_FEE_CAP<=MAX_FEE_CAP&&FUND_FEE_CAP>MAX_SWAP_FEES);
+ let saved:ConversionJournal|null=null;
+ const store:ConversionStore={read:async()=>saved,write:async j=>{saved=structuredClone(j);}};
+ const j=await executeWalletConversion(keys,plan,store,{algod:ALGOD,fetch:chain.fetch,now:()=>1001});
+ assert.equal(j.phase,'confirmed');assert.equal(j.feeCap,String(FUND_FEE_CAP));
+ assert.equal((await resumeWalletConversion(keys.address,store,{algod:ALGOD,fetch:chain.fetch})).phase,'confirmed');
+ await assert.rejects(resumeWalletConversion(keys.address,{read:async()=>({...saved!,feeCap:undefined}),write:async()=>{}},{algod:ALGOD,fetch:chain.fetch}),/invalid|Invalid/,'a resumed trade keeps its limit');
+ await assert.rejects(resumeWalletConversion(keys.address,{read:async()=>({...saved!,feeCap:'0x10'}),write:async()=>{}},{algod:ALGOD,fetch:chain.fetch}),/Invalid saved/);
 });
