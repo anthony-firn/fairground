@@ -162,7 +162,7 @@ report.otherCoins=others;
 console.log('\n6. Live rule over all history under other assumptions (edge vs hold USDC under the same assumptions):');
 const sens:[string,SimOptions][]=[['measured costs',opts],['swap cost 0.2%',{...opts,costs:{...MEASURED_COSTS,swap:0.002}}],['swap cost 0.8%',{...opts,costs:{...MEASURED_COSTS,swap:0.008}}],
  ['price impact doubled',{...opts,costs:{...MEASURED_COSTS,impact:(u:number)=>2*MEASURED_COSTS.impact(u)}}],['app fee limit (20,000)',prevOpts],
- ['idle USDC lent at 4.6%',{...opts,costs:{...MEASURED_COSTS,lendApy:0.046}}],
+ ['no lending',{...opts,costs:{...MEASURED_COSTS,lendApy:0}}],['lending at 2%',{...opts,costs:{...MEASURED_COSTS,lendApy:0.02}}],['lending at 8%',{...opts,costs:{...MEASURED_COSTS,lendApy:0.08}}],
  ['mining 40% of the time',{mining:{...mining,uptime:0.4}}],['mining 100% of the time',{mining:{...mining,uptime:1}}],['10x the mining income',{mining:{...mining,nanoPerDay:15}}]];
 for(const [label,o] of sens){const b=simulate(algo,holdUsdc,o),r=simulate(algo,live,o);console.log(`  ${label.padEnd(26)} IRR ${pct(r.irr).padStart(7)}  edge ${pct(r.irr-b.irr).padStart(7)}  fees ${usd(r.feesUsd)}`);}
 
@@ -196,11 +196,11 @@ for(const flat of [false,true]){
 report.simulated=mc;
 
 // 9. Watch list: the live rule's neighbours and add-ons. A change needs to win on new data, not just here.
-console.log('\n9. Watch list (edge over hold USDC): 2019-2024 | 2021-2026 | BTC ETH SOL DOGE');
+console.log('\n9. Watch list (edge over USDC that is not lent): 2019-2024 | 2021-2026 | BTC ETH SOL DOGE');
 const cut=Math.round((Date.parse('2024-11-18')/1000-algo.t[0])/3600);
 const cand:[string,Strategy,SimOptions][]=[['live',live,opts],['previous',previous,prevOpts],['dip 480h 20%',previous,opts],
  ['dip 240h 20%',dip({hours:240,drop:0.2}),opts],['dip 336h 16%',dip({hours:336,drop:0.16}),opts],['dip 336h 25%',dip({hours:336,drop:0.25}),opts],
- ['dip 336h 20% max 14 days',dip({hours:336,drop:0.2,maxHold:336}),opts],['live + lending idle USDC',live,{...opts,costs:{...MEASURED_COSTS,lendApy:0.046}}]];
+ ['dip 336h 20% max 14 days',dip({hours:336,drop:0.2,maxHold:336}),opts],['live without lending',live,{...opts,costs:{...MEASURED_COSTS,lendApy:0}}]];
 const cands:Record<string,number[]>={};
 for(const [label,st,o] of cand){
  const edge=(s:Series,x:SimOptions)=>simulate(s,st,x).irr-simulate(s,holdUsdc,{...x,costs:{...(x.costs??MEASURED_COSTS),lendApy:0}}).irr;

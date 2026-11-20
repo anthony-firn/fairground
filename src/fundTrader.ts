@@ -11,6 +11,7 @@
  */
 import {USDC_ASSET_ID} from './rails/algorand.ts';
 import type {WalletConversion} from './walletConversion.ts';
+import {LEND_MIN_USDC, type LendingKind} from './fundLending.ts';
 
 export interface DipRule { hours: number; drop: number }
 export const DIP_RULE: DipRule = {hours: 336, drop: 0.2};
@@ -79,4 +80,11 @@ export async function fittingPlan(build: (amount: bigint) => Promise<WalletConve
     }
   }
   throw Error('Router network fees exceed the limit even for the smallest trade.');
+}
+
+/** What to do with the Folks USDC pool before `action`: withdraw everything when buying, otherwise lend USDC that is
+ * only waiting (opting in to fUSDC the first time). `fusdc` is null when the wallet is not opted in. */
+export function lendingStep(action: Action, inTrade: boolean, walletUsdc: bigint, fusdc: bigint | null): LendingKind | undefined {
+  if (action.kind === 'buy') return fusdc && fusdc > 0n ? 'withdraw' : undefined;
+  if (action.kind === 'wait' && !inTrade && walletUsdc >= LEND_MIN_USDC) return fusdc === null ? 'optin' : 'deposit';
 }

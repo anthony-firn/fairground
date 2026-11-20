@@ -34,10 +34,14 @@ export interface Costs {
   /** Fee limit per group; larger trades are split. */
   feeCap: number;
   piecesPerHour: number;
-  /** Annual yield on idle USDC (the live trader does not lend: 0). */
+  /** Annual yield on USDC lent in the Folks pool while waiting; 0 turns lending off. */
   lendApy: number;
+  /** Smallest wallet USDC the trader lends (src/fundLending.ts LEND_MIN_USDC). */
+  lendMinUsd: number;
+  /** Network fees per deposit or withdrawal, µALGO (6,000 and 7,000 measured in simulation). */
+  lendOpFee: number;
 }
-export const MEASURED_COSTS: Costs = {swap: 0.0035, impact: measuredImpact, networkFee: measuredNetworkFee, feeCap: Number(FUND_FEE_CAP), piecesPerHour: 12, lendApy: 0};
+export const MEASURED_COSTS: Costs = {swap: 0.0035, impact: measuredImpact, networkFee: measuredNetworkFee, feeCap: Number(FUND_FEE_CAP), piecesPerHour: 12, lendApy: 0.042, lendMinUsd: 1, lendOpFee: 6500};
 
 export interface Mining { nanoPerDay: number; uptime: number; batchNano: number; keep: number; nanoUsd: (t: number) => number }
 /** 1.5 NANO/day measured 2026-11-18/19; 70% uptime allows for the laptop being used or off. */
@@ -170,7 +174,7 @@ export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, i
   const costs = opts.costs ?? MEASURED_COSTS, mining = opts.mining ?? MEASURED_MINING, w0 = opts.wallet ?? LIVE_WALLET;
   const from = opts.from ?? 0, to = Math.min(opts.to ?? s.c.length, s.c.length);
   const reserve = Number(policyReserve(BigInt(w0.minimum)));
-  let algo = w0.algo, usdc = w0.usdc, inTrade = false, entryPrice = 0, entryAt = 0, spentUsd = 0, boughtAlgo = 0;
+  let lent = 0, algo = w0.algo, usdc = w0.usdc, inTrade = false, entryPrice = 0, entryAt = 0, spentUsd = 0, boughtAlgo = 0;
   let pieces = 0, feesUsd = 0, hoursIn = 0, nano = 0, contributed = w0.algo / 1e6 * s.c[from] + w0.usdc / 1e6;
   const flows: [number, number][] = [[s.t[from], contributed]], tradeReturns: number[] = [];
   let worst = 1;
@@ -188,14 +192,16 @@ export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, i
         algo += usd / close * 1e6; contributed += usd; flows.push([s.t[i], usd]);
       }
     }
-    if (lendHour > 0) usdc *= 1 + lendHour;
+    if (lent > 0) lent *= 1 + lendHour;
     const price = s.o[i + 1];
     for (let k = 0; k < costs.piecesPerHour; k++) {
       const conv = convertible();
-      const m = strategy.decide({s, ind, i, price: close, algo, usdc, convertible: conv, inTrade, entryPrice, entryAt});
+      // Lent USDC counts as available, as in the live trader.
+      const m = strategy.decide({s, ind, i, price: close, algo, usdc: usdc + lent, convertible: conv, inTrade, entryPrice, entryAt});
       if (m.kind === 'wait') break;
       if (m.kind === 'flat') { inTrade = false; closeTrip(); break; }
       if (m.kind === 'buy') {
+        if (lent > 0) { usdc += lent; lent = 0; algo -= costs.lendOpFee; feesUsd += costs.lendOpFee / 1e6 * price; }
         let amount = Math.min(m.usdc, usdc), fee = costs.networkFee(amount / 1e6 / price);
         while (fee > costs.feeCap && amount / 2 >= Number(MIN_BUY_USDC)) { amount /= 2; fee = costs.networkFee(amount / 1e6 / price); }
         if (fee > costs.feeCap || amount < Number(MIN_BUY_USDC) || algo < w0.minimum + fee + Number(BUY_FEE_FLOOR)) break;
@@ -216,10 +222,14 @@ export function simulate(s: Series, strategy: Strategy, opts: SimOptions = {}, i
         else if (m.reason === 'rebalance') inTrade = convertible() > 0;
       }
     }
+    // USDC that is only waiting is lent once there is enough to cover the deposit's fee.
+    if (lendHour > 0 && !inTrade && usdc >= costs.lendMinUsd * 1e6 && algo >= w0.minimum + costs.lendOpFee + Number(BUY_FEE_FLOOR)) {
+      lent += usdc; usdc = 0; algo -= costs.lendOpFee; feesUsd += costs.lendOpFee / 1e6 * close;
+    }
     if (inTrade) hoursIn++;
-    worst = Math.min(worst, (algo / 1e6 * close + usdc / 1e6) / contributed);
+    worst = Math.min(worst, (algo / 1e6 * close + (usdc + lent) / 1e6) / contributed);
   }
-  const last = to - 1, value = algo / 1e6 * s.c[last] + usdc / 1e6;
+  const last = to - 1, value = algo / 1e6 * s.c[last] + (usdc + lent) / 1e6;
   return {strategy: strategy.name, series: s.name, from: s.t[from], to: s.t[last], value, contributed, irr: irr(flows, s.t[last], value),
     pieces, roundTrips: tradeReturns.length, feesUsd, inMarket: hoursIn / Math.max(1, last - from), worst, tradeReturns};
 }

@@ -82,3 +82,15 @@ test('a round trip’s return compares the exit price after costs with the avera
  const k=1-MEASURED_COSTS.swap,expected=0.10*k*k/0.07-1;// $5: no size impact
  assert.ok(Math.abs(r.tradeReturns[0]-expected)<1e-9,`${r.tradeReturns[0]} vs ${expected}`);
 });
+
+test('waiting USDC earns the pool rate after deposit fees, and a buy withdraws it first',()=>{
+ const n=8761,flatSeries:Series={name:'flat',t:Float64Array.from({length:n},(_,k)=>k*3600),o:new Float64Array(n).fill(0.1),c:new Float64Array(n).fill(0.1)};
+ const lent=simulate(flatSeries,holdUsdc,{mining:NO_MINING,wallet:{algo:600_000,usdc:10_000_000,minimum:200_000}});
+ const none=simulate(flatSeries,holdUsdc,{mining:NO_MINING,costs:{...MEASURED_COSTS,lendApy:0},wallet:{algo:600_000,usdc:10_000_000,minimum:200_000}});
+ const year=Math.pow(1+MEASURED_COSTS.lendApy/8760,8759)-1;
+ assert.ok(Math.abs((lent.value-none.value)-(10*year-MEASURED_COSTS.lendOpFee/1e6*0.1))<1e-6,`${lent.value-none.value}`);
+ const c=new Float64Array(1200).fill(0.10);c.fill(0.07,700,705);
+ const dipSeries:Series={name:'dip',t:Float64Array.from({length:1200},(_,k)=>k*3600),o:Float64Array.from(c,(x,k)=>k?c[k-1]:x),c};
+ const r=simulate(dipSeries,dip({hours:480,drop:0.2}),{mining:NO_MINING,wallet:{algo:600_000,usdc:5_000_000,minimum:200_000}});
+ assert.equal(r.roundTrips,1,'the lent USDC was withdrawn and spent on the dip');
+});
