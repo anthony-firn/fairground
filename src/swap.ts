@@ -41,9 +41,10 @@ async function call(url: string, fetchImpl: Fetch): Promise<unknown> {
   return body.result;
 }
 
-/** A price for converting `amount` of one asset (0 for ALGO) into another. */
-export async function quoteSwap(from: number, to: number, amount: bigint, fetchImpl: Fetch = defaultFetch, api = ROUTER_API): Promise<SwapQuote> {
-  const q = new URLSearchParams({ network: 'mainnet', fromAsset: String(from), toAsset: String(to), amount: amount.toString(), type: 'FIXED_INPUT', maxGroupSize: '16', feeBps: String(ROUTER_FEE_BPS) });
+/** A price for converting `amount` of one asset (0 for ALGO) into another, in at most `maxGroupSize` transactions
+ * (less than 16 when the swap shares an atomic group with other transactions). */
+export async function quoteSwap(from: number, to: number, amount: bigint, fetchImpl: Fetch = defaultFetch, api = ROUTER_API, maxGroupSize = 16): Promise<SwapQuote> {
+  const q = new URLSearchParams({ network: 'mainnet', fromAsset: String(from), toAsset: String(to), amount: amount.toString(), type: 'FIXED_INPUT', maxGroupSize: String(maxGroupSize), feeBps: String(ROUTER_FEE_BPS) });
   const r = (await call(`${api}/fetch/quote?${q}`, fetchImpl)) as { quoteAmount: string; priceImpact: number; microalgoTxnsFee: number; txnPayload: string };
   return { from, to, amount, quote: BigInt(r.quoteAmount), priceImpact: r.priceImpact, fees: BigInt(r.microalgoTxnsFee), payload: r.txnPayload };
 }
@@ -62,7 +63,7 @@ const uint64 = (b: unknown) => (b instanceof Uint8Array && b.length === 8 ? b.re
 const same = (a: unknown, b: Uint8Array) => a instanceof Uint8Array && a.length === b.length && a.every((x, i) => x === b[i]);
 
 /** Why the router's transactions shouldn't be signed, or undefined if they do exactly what was asked. */
-export function swapProblem(raw: Uint8Array[], user: string, q: SwapQuote): string | undefined {
+export function swapProblem(raw: Uint8Array[], user: string, q: SwapQuote, maxFees = MAX_SWAP_FEES): string | undefined {
   if (raw.length < 2 || raw.length > 16) return 'unexpected number of transactions';
   let txns: Txn[];
   try {
@@ -80,7 +81,7 @@ export function swapProblem(raw: Uint8Array[], user: string, q: SwapQuote): stri
     if (!(group instanceof Uint8Array) || !same(t.grp, group)) return 'the transactions aren’t one group';
     fees += typeof t.fee === 'bigint' ? t.fee : 0n;
   }
-  if (fees > MAX_SWAP_FEES) return 'network fees are too high';
+  if (fees > maxFees) return 'network fees are too high';
   const [first, ...rest] = txns;
   const last = rest.pop()!;
   const sends = q.from === 0
