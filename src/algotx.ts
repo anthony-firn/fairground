@@ -52,8 +52,9 @@ function encode(v: Value): Uint8Array {
     throw new Error('bytes too long');
   }
   if (Array.isArray(v)) {
-    if (v.length >= 16) throw new Error('array too long');
-    return concat(new Uint8Array([0x90 | v.length]), ...v.map(encode));
+    if (v.length < 16) return concat(new Uint8Array([0x90 | v.length]), ...v.map(encode));
+    if (v.length < 65536) return concat(new Uint8Array([0xdc, v.length >> 8, v.length & 0xff]), ...v.map(encode));
+    throw new Error('array too long');
   }
   const keys = Object.keys(v).filter((k) => !empty(v[k])).sort();
   if (keys.length >= 16) throw new Error('map too large');

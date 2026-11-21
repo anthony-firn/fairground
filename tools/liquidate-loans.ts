@@ -101,12 +101,13 @@ async function tick(live:boolean){
  const optIn=!(acct.assets??[]).some((x:{'asset-id':number})=>x['asset-id']===FALGO),mbr=optIn?100_000n:0n;
  const state=await walletState(me),spare=state.algo-state.minimum,price=Number(algoPrice)/1e8;
  for(const c of worth.slice(0,2)){
-  const need=flashRepayment(c.repay);
-  let algoSwap=c.algoIn,quote=await quoteSwap(0,USDC,algoSwap),minOut=minReceive(quote);
+  // The flash loan, liquidation, withdrawal and repayment take 10 transactions (11 with the opt-in): the swap gets the rest of 16.
+  const need=flashRepayment(c.repay),routerMax=16-(optIn?11:10);
+  let algoSwap=c.algoIn,quote=await quoteSwap(0,USDC,algoSwap,undefined,undefined,routerMax),minOut=minReceive(quote);
   if(minOut<need){failedAt.set(c.escrow,Date.now());continue;}
   // Keep enough of the ALGO to top the fee float back up and swap the rest (re-quoted: it must still cover the repayment).
   const keep=algoToKeep(c.algoIn,minOut,need,spare-mbr-FEE_ESTIMATE,TARGET_SPARE);
-  if(keep>0n){const q=await quoteSwap(0,USDC,c.algoIn-keep),m=minReceive(q);if(m>=need){algoSwap=c.algoIn-keep;quote=q;minOut=m;}}
+  if(keep>0n){const q=await quoteSwap(0,USDC,c.algoIn-keep,undefined,undefined,routerMax),m=minReceive(q);if(m>=need){algoSwap=c.algoIn-keep;quote=q;minOut=m;}}
   const p=await suggestedParams(DEFAULT_ALGOD);
   const args={liquidator:me,escrow:c.escrow,loanApp:LOAN,loanAssets:c.loanAssets,repay:c.repay,fWithdraw:c.fWithdraw,minCollateral:c.fWithdraw,budget:BUDGET,optIn};
   const txns=flashLiquidationGroup(args,(await prepareSwap(me,quote)).map(decodeTxn),p);

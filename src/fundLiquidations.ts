@@ -195,7 +195,7 @@ export function flashLiquidationProblem(txns: Txn[], a: FlashLiquidationArgs, al
   const me = addressKey(a.liquidator), genesis = base64.decode('wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=');
   const allowedApps = new Set([FOLKS_USDC_POOL_APP, FOLKS_ALGO_POOL_APP, a.loanApp, FOLKS_ORACLE_ADAPTER, ROUTER_APP_ID, 1167143153n]);
   const usdcPool = addressKey(applicationAddress(FOLKS_USDC_POOL_APP)), algoPool = addressKey(applicationAddress(FOLKS_ALGO_POOL_APP)), router = addressKey(applicationAddress(ROUTER_APP_ID));
-  if (txns.length < 10 || txns.length > 17) return 'unexpected number of transactions';
+  if (txns.length < 10 || txns.length > 16) return 'unexpected number of transactions';  // Algorand's group limit
   let fees = 0n;
   for (const t of txns) {
     if (!same(t.snd, me)) return 'a transaction isn’t from this wallet';

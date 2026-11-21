@@ -41,9 +41,10 @@ async function call(url: string, fetchImpl: Fetch): Promise<unknown> {
   return body.result;
 }
 
-/** A price for converting `amount` of one asset (0 for ALGO) into another. */
-export async function quoteSwap(from: number, to: number, amount: bigint, fetchImpl: Fetch = defaultFetch, api = ROUTER_API): Promise<SwapQuote> {
-  const q = new URLSearchParams({ network: 'mainnet', fromAsset: String(from), toAsset: String(to), amount: amount.toString(), type: 'FIXED_INPUT', maxGroupSize: '16', feeBps: String(ROUTER_FEE_BPS) });
+/** A price for converting `amount` of one asset (0 for ALGO) into another, in at most `maxGroupSize` transactions
+ * (less than 16 when the swap shares an atomic group with other transactions). */
+export async function quoteSwap(from: number, to: number, amount: bigint, fetchImpl: Fetch = defaultFetch, api = ROUTER_API, maxGroupSize = 16): Promise<SwapQuote> {
+  const q = new URLSearchParams({ network: 'mainnet', fromAsset: String(from), toAsset: String(to), amount: amount.toString(), type: 'FIXED_INPUT', maxGroupSize: String(maxGroupSize), feeBps: String(ROUTER_FEE_BPS) });
   const r = (await call(`${api}/fetch/quote?${q}`, fetchImpl)) as { quoteAmount: string; priceImpact: number; microalgoTxnsFee: number; txnPayload: string };
   return { from, to, amount, quote: BigInt(r.quoteAmount), priceImpact: r.priceImpact, fees: BigInt(r.microalgoTxnsFee), payload: r.txnPayload };
 }

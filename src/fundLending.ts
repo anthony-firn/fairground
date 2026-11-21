@@ -150,7 +150,7 @@ export function prepareLending(kind: LendingKind, state: WalletState, amount: bi
  * The request is MessagePack, so each unsigned transaction goes in as the exact bytes that would be signed. */
 export async function simulate(groups: Uint8Array[][], algod: string, fetchImpl: typeof fetch = (...a) => fetch(...a)): Promise<{ok: boolean; message?: string; 'txn-groups'?: {'failure-message'?: string; 'failed-at'?: number[]; 'app-budget-consumed'?: number; 'app-budget-added'?: number; 'txn-results'?: {'app-budget-consumed'?: number; 'txn-result'?: {txn?: {txn?: {fee?: number}}}}[]}[]}> {
   const str = (s: string) => { const b = new TextEncoder().encode(s); if (b.length > 31) throw Error('key too long'); return [0xa0 | b.length, ...b]; };
-  const arr = (n: number) => { if (n > 15) throw Error('too many entries'); return [0x90 | n]; };
+  const arr = (n: number) => (n < 16 ? [0x90 | n] : n < 65536 ? [0xdc, n >> 8, n & 0xff] : (() => { throw Error('too many entries'); })());
   const parts: number[][] = [[0x82], str('allow-empty-signatures'), [0xc3], str('txn-groups'), arr(groups.length)];
   for (const g of groups) {
     parts.push([0x81], str('txns'), arr(g.length));

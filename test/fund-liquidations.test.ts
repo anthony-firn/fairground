@@ -103,3 +103,13 @@ test('loans touching an asset with a zero or stale oracle price are recognised a
  assert.deepEqual(blockedAssets(prices,[0n],now),[]);
  assert.deepEqual(blockedAssets(prices,[0n,287867876n,227855942n,999n],now),[287867876n,227855942n,999n]);
 });
+
+test('a group over Algorand’s 16-transaction limit is refused, and a full 16 still encodes',async()=>{
+ const {encodeTxn}=await import('../src/algotx.ts');
+ const {args,txns,algoIn,minOut}=group(true);
+ const pad=(n:number)=>{const t=txns.map(x=>structuredClone(x));const extra=t[8];for(let i=0;i<n;i++)t.splice(8,0,structuredClone(extra));
+  (t[1].apaa as Uint8Array[])[2]=words([BigInt(t.length-1)]);assignGroup(t);return t;};
+ assert.equal(pad(3).length,16);assert.equal(flashLiquidationProblem(pad(3),args,algoIn,minOut),undefined);
+ assert.match(flashLiquidationProblem(pad(4),args,algoIn,minOut)??'',/number of transactions/);
+ assert.equal(pad(3).map(encodeTxn).length,16);
+});
