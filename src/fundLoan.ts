@@ -31,8 +31,18 @@ const OPUP_BASE = 971335616n;
 export const ESCROW_FUNDING = 828_500n;
 /** The loan's ALGO collateral factor and the health below which the trader repays part of the debt itself. */
 export const ALGO_COLLATERAL_FACTOR = 0.65;
-/** Pool positions in the pool manager (poolManagerIndex) and in the general loan (loans[loanApp]). */
-const ALGO_PM_INDEX = 0, USDC_PM_INDEX = 2, ALGO_LOAN_INDEX = 0, USDC_LOAN_INDEX = 2;
+/** Pool positions in the pool manager (poolManagerIndex). */
+const ALGO_PM_INDEX = 0, USDC_PM_INDEX = 2;
+/** A Folks loan type: its app, where the ALGO and USDC pools sit in its pool list (each loan type has its own order),
+ * and the factor its ALGO collateral counts at. All types share the loan contract's methods. */
+export interface LoanKind { name: string; app: bigint; algoLoanIndex: number; usdcLoanIndex: number; collateralFactor: number }
+export const GENERAL_LOAN: LoanKind = {name: 'general', app: FOLKS_GENERAL_LOAN, algoLoanIndex: 0, usdcLoanIndex: 2, collateralFactor: ALGO_COLLATERAL_FACTOR};
+/** Folks' leveraged-long loan (mainnet 2026-11-21): ALGO collateral at 0.825, USDC borrow only, and a liquidation takes
+ * the whole debt with no bonus. Its pool list starts USDC (0), ALGO (1); its escrow needs the same local state. */
+export const ULTRASWAP_UP_LOAN: LoanKind = {name: 'ultraswap up', app: 1202382736n, algoLoanIndex: 1, usdcLoanIndex: 0, collateralFactor: 0.825};
+export const LOAN_KINDS = [GENERAL_LOAN, ULTRASWAP_UP_LOAN];
+/** The loan type that owns an escrow's loan: the recorded app, else the general loan (escrows made before 2026-11-21). */
+export const loanKindFor = (app: string | bigint | undefined): LoanKind => LOAN_KINDS.find((k) => app !== undefined && k.app === BigInt(app)) ?? GENERAL_LOAN;
 
 const enc = new TextEncoder();
 const selector = (signature: string) => sha512_256(enc.encode(signature)).slice(0, 4);
@@ -72,30 +82,30 @@ export function newEscrow(): Escrow {
 
 /** Creates the loan: a zero payment noting the escrow, then the escrow opts in to the loan app and is rekeyed to it.
  * `fund` µALGO are first paid to the escrow for its minimum balance. */
-export function createLoanGroup(user: string, escrow: string, fund: bigint, p: LoanParams): Txn[] {
-  const loanAddr = addressKey(applicationAddress(FOLKS_GENERAL_LOAN));
+export function createLoanGroup(user: string, escrow: string, fund: bigint, p: LoanParams, kind: LoanKind = GENERAL_LOAN): Txn[] {
+  const loanAddr = addressKey(applicationAddress(kind.app));
   const pay: Txn = {...head(user, 1000n, p), type: 'pay', rcv: addressKey(escrow), amt: fund};
   const note: Txn = {...head(user, 2000n, p), type: 'pay', rcv: loanAddr, note: new Uint8Array([...enc.encode('la '), ...addressKey(escrow)])};
-  const optIn: Txn = {...head(escrow, 0n, p), type: 'appl', apid: FOLKS_GENERAL_LOAN, apan: 1n, apaa: [selector(SIG.createLoan)], rekey: loanAddr};
+  const optIn: Txn = {...head(escrow, 0n, p), type: 'appl', apid: kind.app, apan: 1n, apaa: [selector(SIG.createLoan)], rekey: loanAddr};
   const txns = fund > 0n ? [pay, note, optIn] : [note, optIn];
   assignGroup(txns);
   return txns;
 }
 
 /** Lets the escrow hold fALGO as collateral (the loan app opts it in). */
-export function addCollateralGroup(user: string, escrow: string, p: LoanParams): Txn[] {
-  return [call(user, 2000n, p, FOLKS_GENERAL_LOAN, [selector(SIG.addCollateral), u8(1), u8(0), u8(1), u8(ALGO_PM_INDEX), u8(ALGO_LOAN_INDEX), u8(2)],
+export function addCollateralGroup(user: string, escrow: string, p: LoanParams, kind: LoanKind = GENERAL_LOAN): Txn[] {
+  return [call(user, 2000n, p, kind.app, [selector(SIG.addCollateral), u8(1), u8(0), u8(1), u8(ALGO_PM_INDEX), u8(kind.algoLoanIndex), u8(2)],
     {accounts: [escrow], assets: [FALGO_ASSET_ID], apps: [FOLKS_ALGO_POOL, FOLKS_POOL_MANAGER]})];
 }
 
 /** Deposits `amount` µALGO to the ALGO pool for the escrow (fALGO collateral), then records it in the loan. */
-export function depositCollateralGroup(user: string, escrow: string, amount: bigint, p: LoanParams): Txn[] {
+export function depositCollateralGroup(user: string, escrow: string, amount: bigint, p: LoanParams, kind: LoanKind = GENERAL_LOAN): Txn[] {
   const send: Txn = {...head(user, 1000n, p), type: 'pay', rcv: addressKey(applicationAddress(FOLKS_ALGO_POOL)), amt: amount};
   const deposit = call(user, 3000n, p, FOLKS_ALGO_POOL, [selector(SIG.deposit), u8(1), u8(0), u8(1), u8(1)],
     {accounts: [escrow], assets: [0, FALGO_ASSET_ID], apps: [FOLKS_POOL_MANAGER]});
   const update = call(user, 2000n, p, FOLKS_ALGO_POOL, [selector(SIG.updateIndexes), u8(1)], {apps: [FOLKS_POOL_MANAGER]});
   const refresh = refreshPrices(user, [0], p);
-  const sync = call(user, 1000n, p, FOLKS_GENERAL_LOAN, [selector(SIG.syncCollateral), u8(1), u8(0), u8(1), u8(2), u8(3)],
+  const sync = call(user, 1000n, p, kind.app, [selector(SIG.syncCollateral), u8(1), u8(0), u8(1), u8(2), u8(3)],
     {accounts: [escrow], assets: [FALGO_ASSET_ID], apps: [FOLKS_ALGO_POOL, FOLKS_POOL_MANAGER, FOLKS_ORACLE_ADAPTER]});
   const txns = [opUp(user, 2, p), send, deposit, update, refresh, sync];
   assignGroup(txns);
@@ -104,9 +114,9 @@ export function depositCollateralGroup(user: string, escrow: string, amount: big
 
 const LOAN_ASSETS = [0, USDC_ASSET_ID];
 /** Borrows `amount` µUSDC at the variable rate, paid to the fund's wallet. */
-export function borrowGroup(user: string, escrow: string, amount: bigint, p: LoanParams): Txn[] {
+export function borrowGroup(user: string, escrow: string, amount: bigint, p: LoanParams, kind: LoanKind = GENERAL_LOAN): Txn[] {
   const refresh = refreshPrices(user, LOAN_ASSETS, p);
-  const borrow = call(user, 8000n, p, FOLKS_GENERAL_LOAN, [selector(SIG.borrow), u8(1), u8(0), u8(0), u64(amount), u64(0n), u8(USDC_PM_INDEX), u8(USDC_LOAN_INDEX), u8(1), u8(2), u8(3)],
+  const borrow = call(user, 8000n, p, kind.app, [selector(SIG.borrow), u8(1), u8(0), u8(0), u64(amount), u64(0n), u8(USDC_PM_INDEX), u8(kind.usdcLoanIndex), u8(1), u8(2), u8(3)],
     {accounts: [escrow], assets: [USDC_ASSET_ID], apps: [FOLKS_USDC_POOL, FOLKS_POOL_MANAGER, FOLKS_ORACLE_ADAPTER]});
   const txns = [opUp(user, 6, p), refresh, borrow];
   assignGroup(txns);
@@ -114,9 +124,9 @@ export function borrowGroup(user: string, escrow: string, amount: bigint, p: Loa
 }
 
 /** Repays `amount` µUSDC of the variable borrow from the fund's wallet. */
-export function repayGroup(user: string, escrow: string, amount: bigint, p: LoanParams): Txn[] {
+export function repayGroup(user: string, escrow: string, amount: bigint, p: LoanParams, kind: LoanKind = GENERAL_LOAN): Txn[] {
   const send: Txn = {...head(user, 1000n, p), type: 'axfer', arcv: addressKey(applicationAddress(FOLKS_USDC_POOL)), xaid: BigInt(USDC_ASSET_ID), aamt: amount};
-  const repay = call(user, 9000n, p, FOLKS_GENERAL_LOAN, [selector(SIG.repay), u8(1), u8(0), u8(2), u8(0), u8(1), bool(false), u8(1), u8(2)],
+  const repay = call(user, 9000n, p, kind.app, [selector(SIG.repay), u8(1), u8(0), u8(2), u8(0), u8(1), bool(false), u8(1), u8(2)],
     {accounts: [escrow, FOLKS_RESERVE], assets: [USDC_ASSET_ID, FRUSDC_ASSET_ID], apps: [FOLKS_USDC_POOL, FOLKS_POOL_MANAGER]});
   const txns = [opUp(user, 3, p), send, repay];
   assignGroup(txns);
@@ -124,16 +134,16 @@ export function repayGroup(user: string, escrow: string, amount: bigint, p: Loan
 }
 
 /** Takes `fAmount` µfALGO of collateral out of the loan as ALGO to the fund's wallet. */
-export function reduceCollateralGroup(user: string, escrow: string, fAmount: bigint, p: LoanParams): Txn[] {
+export function reduceCollateralGroup(user: string, escrow: string, fAmount: bigint, p: LoanParams, kind: LoanKind = GENERAL_LOAN): Txn[] {
   const refresh = refreshPrices(user, LOAN_ASSETS, p);
-  const reduce = call(user, 6000n, p, FOLKS_GENERAL_LOAN, [selector(SIG.reduceCollateral), u8(1), u8(0), u8(0), u8(1), u64(fAmount), bool(true), u8(1), u8(2), u8(3)],
+  const reduce = call(user, 6000n, p, kind.app, [selector(SIG.reduceCollateral), u8(1), u8(0), u8(0), u8(1), u64(fAmount), bool(true), u8(1), u8(2), u8(3)],
     {accounts: [escrow], assets: [0, FALGO_ASSET_ID], apps: [FOLKS_ALGO_POOL, FOLKS_POOL_MANAGER, FOLKS_ORACLE_ADAPTER]});
   const txns = [opUp(user, 3, p), refresh, reduce];
   assignGroup(txns);
   return txns;
 }
 
-const ALLOWED_APPS = new Set([FOLKS_GENERAL_LOAN, FOLKS_ALGO_POOL, FOLKS_USDC_POOL, FOLKS_ORACLE_ADAPTER, FOLKS_OPUP_CALLER]);
+const OTHER_APPS = [FOLKS_ALGO_POOL, FOLKS_USDC_POOL, FOLKS_ORACLE_ADAPTER, FOLKS_OPUP_CALLER];
 const POOL_ADDRESSES = () => new Set([applicationAddress(FOLKS_ALGO_POOL), applicationAddress(FOLKS_USDC_POOL)]);
 const same = (a: unknown, b: Uint8Array) => a instanceof Uint8Array && a.length === b.length && a.every((v, i) => v === b[i]);
 
@@ -141,12 +151,13 @@ const same = (a: unknown, b: Uint8Array) => a instanceof Uint8Array && a.length 
  * the new escrow handing itself to the loan app); payments may go only to the escrow (its minimum balance), the loan
  * app (the zero note) or a Folks pool; app calls only to the loan, pools and oracle adapter; nothing may close an
  * account, and only the escrow may be rekeyed, only to the loan app; fees are bounded. */
-export function loanProblem(raw: Uint8Array[], user: string, escrow: string, maxPay: bigint): string | undefined {
+export function loanProblem(raw: Uint8Array[], user: string, escrow: string, maxPay: bigint, kind: LoanKind = GENERAL_LOAN): string | undefined {
+  const allowedApps = new Set([kind.app, ...OTHER_APPS]);
   let txns: Txn[];
   try { txns = raw.map(decodeTxn); } catch { return 'unreadable transactions'; }
   if (txns.length < 1 || txns.length > 6) return 'unexpected number of transactions';
   const me = addressKey(user), esc = addressKey(escrow), genesis = base64.decode(MAINNET_GENESIS_HASH);
-  const loanAddr = addressKey(applicationAddress(FOLKS_GENERAL_LOAN)), pools = [...POOL_ADDRESSES()].map(addressKey);
+  const loanAddr = addressKey(applicationAddress(kind.app)), pools = [...POOL_ADDRESSES()].map(addressKey);
   let fees = 0n;
   for (const t of txns) {
     if (t.gen !== 'mainnet-v1.0' || !same(t.gh, genesis)) return 'not on Algorand mainnet';
@@ -154,7 +165,7 @@ export function loanProblem(raw: Uint8Array[], user: string, escrow: string, max
     if (t.close !== undefined || t.aclose !== undefined || t.asnd !== undefined) return 'a transaction would empty an account';
     const fromMe = same(t.snd, me), fromEscrow = same(t.snd, esc);
     if (!fromMe && !fromEscrow) return 'a transaction is from someone else';
-    if (fromEscrow && !(t.type === 'appl' && t.apid === FOLKS_GENERAL_LOAN && t.apan === 1n && same(t.rekey, loanAddr) && t.fee === undefined)) return 'the escrow may only hand itself to the loan app';
+    if (fromEscrow && !(t.type === 'appl' && t.apid === kind.app && t.apan === 1n && same(t.rekey, loanAddr) && t.fee === undefined)) return 'the escrow may only hand itself to the loan app';
     if (fromMe && t.rekey !== undefined) return 'the wallet would be rekeyed';
     if (t.type === 'pay') {
       const toEscrow = same(t.rcv, esc), toLoan = same(t.rcv, loanAddr), toPool = pools.some((p) => same(t.rcv, p));
@@ -162,7 +173,7 @@ export function loanProblem(raw: Uint8Array[], user: string, escrow: string, max
     } else if (t.type === 'axfer') {
       if (!pools.some((p) => same(t.arcv, p)) || t.xaid !== BigInt(USDC_ASSET_ID) || typeof t.aamt !== 'bigint' || t.aamt > maxPay) return 'an asset transfer goes somewhere unexpected';
     } else if (t.type === 'appl') {
-      if (!ALLOWED_APPS.has(t.apid as bigint)) return 'a call to an unexpected app';
+      if (!allowedApps.has(t.apid as bigint)) return 'a call to an unexpected app';
       if (t.apap !== undefined || t.apsu !== undefined || (t.apan !== undefined && !fromEscrow)) return 'a call would change or leave an app';
     } else return 'unexpected transaction type';
     fees += typeof t.fee === 'bigint' ? t.fee : 0n;
@@ -206,7 +217,8 @@ export function borrowIndexAt(state: {key: string; value: {bytes?: string}}[], p
 }
 
 /** Collateral value × factor over debt: below 1 the loan can be liquidated. Infinity without debt. */
-export const loanHealth = (collateralAlgo: number, price: number, debtUsd: number): number => (debtUsd <= 0 ? Infinity : collateralAlgo * price * ALGO_COLLATERAL_FACTOR / debtUsd);
+export const loanHealth = (collateralAlgo: number, price: number, debtUsd: number, collateralFactor = ALGO_COLLATERAL_FACTOR): number =>
+  (debtUsd <= 0 ? Infinity : collateralAlgo * price * collateralFactor / debtUsd);
 
 
 /** The pool manager's deposit index (1e14 = 1 ALGO per fALGO for the ALGO pool) at `now`, simple interest like the SDK. */

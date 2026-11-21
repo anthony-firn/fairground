@@ -5,8 +5,9 @@
  *   node tools/trade-development-fund.ts [--live] [--once]
  *
  * USDC that is only waiting for a dip is lent in the Folks Finance USDC pool (src/fundLending.ts) and withdrawn when
- * the rule buys. Dip trades borrow LEVERAGE - 1 times their size in USDC against the bought ALGO in a Folks general
- * loan (src/fundLoan.ts), repaid at the exit; the trader repays part itself if the loan's health falls toward liquidation.
+ * the rule buys. Dip trades borrow LEVERAGE - 1 times their size in USDC against the bought ALGO in a Folks loan of type
+ * LOAN_KIND (src/fundTrader.ts, src/fundLoan.ts), buying and depositing more ALGO with each borrow, and repay at the exit;
+ * the trader sells down itself if the loan's health falls toward liquidation.
  *
  * Without --live it only reports what it would do. Create ~/.local/share/evolve-bootstrap/treasury/PAUSE to stop new
  * trades and lending; a trade already signed is still confirmed. status.json, equity.jsonl and trades.jsonl in the
@@ -22,12 +23,12 @@ import {randomBytes} from 'node:crypto';
 import {DEVELOPMENT_ADDRESS} from '../src/defaults.ts';
 import {confirmed,DEFAULT_ALGOD,submit,suggestedParams,walletKeys,walletState,type WalletKeys,type WalletState} from '../src/wallet.ts';
 import {decodeTxn,encodeAddressKey,signRaw,txid} from '../src/algotx.ts';
-import {ESCROW_FUNDING,FOLKS_ALGO_POOL,FOLKS_GENERAL_LOAN,addCollateralGroup,borrowGroup,borrowIndexAt,createLoanGroup,currentDebt,depositCollateralGroup,depositIndexAt,
+import {ESCROW_FUNDING,FOLKS_ALGO_POOL,loanKindFor,type LoanKind,addCollateralGroup,borrowGroup,borrowIndexAt,createLoanGroup,currentDebt,depositCollateralGroup,depositIndexAt,
  encodeGroup,loanHealth,loanProblem,newEscrow,parseLoanState,reduceCollateralGroup,repayGroup,type Escrow} from '../src/fundLoan.ts';
 import {FOLKS_POOL_MANAGER,FOLKS_USDC_POOL,fusdcHolding,fusdcValue,lendingFeeProblem,oneGroupForSimulation,poolRate,prepareLending,simulateGroups,type LendingKind} from '../src/fundLending.ts';
 import {convertibleOnRequest,prepareWalletBuy,prepareWalletConversion,walletSignerProblem,type WalletConversion} from '../src/walletConversion.ts';
 import {executeWalletConversion,resumeWalletConversion,type ConversionJournal,type ConversionStore} from '../src/conversionSession.ts';
-import {DIP_RULE,LEVERAGE,LOAN_SETUP_ALGO,decide,dipSignal,fittingPlan,lendingStep,loanStep,nextMove,quotePriceProblem,FUND_FEE_CAP,MIN_BUY_USDC,MIN_SWEEP_ALGO,type Action,type LoanAction,type Move} from '../src/fundTrader.ts';
+import {DIP_RULE,LEVERAGE,LOAN_KIND,LOAN_SETUP_ALGO,nextDelevering,viewHealth,decide,dipSignal,fittingPlan,lendingStep,loanStep,nextMove,quotePriceProblem,FUND_FEE_CAP,MIN_BUY_USDC,MIN_SWEEP_ALGO,type Action,type LoanAction,type Move} from '../src/fundTrader.ts';
 
 const uid=process.getuid?.();if(uid===undefined)throw Error('The local operator utility requires a Unix user ID');
 const dir=join(homedir(),'.local/share/evolve-bootstrap/treasury');
@@ -63,7 +64,11 @@ const store:ConversionStore={read:async()=>{
 interface Trader {version:1; inTrade:boolean; intent?:{kind:'buy'|'exit'|'sweep';at:number}; entryPrice?:number; entryAt?:string; equityHour?:number;
  /** The Folks loan: its escrow (address only; its key is discarded once the loan app controls it), whether it is set up,
   * whether this trade has borrowed, and the own µUSDC this trade spent. */
- loan?:{escrow?:string;created?:boolean;collateralAdded?:boolean;levered?:boolean;tradeUsdc?:string}}
+ loan?:{escrow?:string;created?:boolean;collateralAdded?:boolean;levered?:boolean;tradeUsdc?:string;
+  /** The loan app the escrow belongs to (absent: a general loan, from before 2026-11-21), and whether a sell-down is under way. */
+  app?:string;delevering?:boolean}}
+/** The loan type of the trader's escrow, or LOAN_KIND for the next one. */
+const kindOf=(trader:Trader):LoanKind=>trader.loan?.escrow?loanKindFor(trader.loan.app):LOAN_KIND;
 const traderPath=join(dir,'trader.json');
 async function readTrader():Promise<Trader>{
  try{const t=await privateJson(traderPath) as Trader;if(t.version!==1||typeof t.inTrade!=='boolean')throw Error('Invalid trader state');return t;}
@@ -153,7 +158,7 @@ async function readLoan(trader:Trader):Promise<{collateralF:bigint;algoIndex:big
  const gs=pm.params['global-state'],algoIndex=depositIndexAt(gs,0,FOLKS_ALGO_POOL,now);
  const escrow=trader.loan?.escrow;
  if(!escrow)return {collateralF:0n,algoIndex,debt:0n,exists:false};
- const r=await fetch(`${DEFAULT_ALGOD}/v2/accounts/${escrow}/applications/${FOLKS_GENERAL_LOAN}`,{signal:AbortSignal.timeout(20000)});
+ const r=await fetch(`${DEFAULT_ALGOD}/v2/accounts/${escrow}/applications/${kindOf(trader).app}`,{signal:AbortSignal.timeout(20000)});
  if(r.status===404)return {collateralF:0n,algoIndex,debt:0n,exists:false};
  if(!r.ok)throw Error(`Could not read the loan (HTTP ${r.status})`);
  const local=((await r.json()) as {'app-local-state'?:{'key-value'?:{key:string;value:{bytes?:string}}[]}})['app-local-state']?.['key-value']??[];
@@ -185,9 +190,13 @@ async function observe(trader:Trader,closes:number[]):Promise<Observed>{
  const lendingBlocked=lend?lendingFeeProblem(lend,state):undefined;if(lendingBlocked&&lend!=='withdraw')lend=undefined;
  const floor=state.minimum+100_000n;
  const setupAffordable=!trader.loan?.created?state.algo>=floor+ESCROW_FUNDING+10_000n:state.algo>=floor+5_000n;
- const loanAct=loanStep({inTrade:trader.inTrade,levered:!!trader.loan?.levered,hasEscrow:!!trader.loan?.created,collateralAdded:!!trader.loan?.collateralAdded,
+ // A sell-down starts below DELEVER_HEALTH and continues (across checks) until health is back to DELEVER_TO.
+ const cf=kindOf(trader).collateralFactor,health=viewHealth({collateralF:loan.collateralF,algoIndex:loan.algoIndex,debt:loan.debt,price:spot},cf);
+ const delevering=trader.inTrade&&loan.debt>0n&&nextDelevering(health,!!trader.loan?.delevering);
+ if(trader.loan&&!!trader.loan.delevering!==delevering){trader.loan.delevering=delevering;await write(traderPath,trader);}
+ const loanAct=loanStep({inTrade:trader.inTrade,levered:!!trader.loan?.levered,hasEscrow:!!trader.loan?.created,collateralAdded:!!trader.loan?.collateralAdded,delevering,
   walletAlgo:rawConvertible,walletUsdc:state.usdc,collateralF:loan.collateralF,algoIndex:loan.algoIndex,debt:loan.debt,price:spot,
-  tradeUsdc:BigInt(trader.loan?.tradeUsdc??'0'),setupAffordable});
+  tradeUsdc:BigInt(trader.loan?.tradeUsdc??'0'),setupAffordable},LEVERAGE,cf);
  return {state,signal,fusdc,lent,lendRate:pool.rate,rawConvertible,convertible,action,lend,lendingBlocked,loan,loanAct,spot};
 }
 
@@ -217,24 +226,24 @@ async function swap(n:Extract<Next,{kind:'swap'}>,o:Observed,trader:Trader,keys:
 
 async function loanOp(act:LoanAction,o:Observed,trader:Trader,keys:WalletKeys){
  const p=await suggestedParams(DEFAULT_ALGOD),user=DEVELOPMENT_ADDRESS!;
- let escrow=trader.loan?.escrow,fresh:Escrow|undefined;
+ let escrow=trader.loan?.escrow,fresh:Escrow|undefined;const kind=kindOf(trader);
  if(act.step==='create'){fresh=newEscrow();escrow=fresh.address;}
  if(!escrow)throw Error('No loan escrow');
  try{
   const [txns,maxPay,amount]=
-   act.step==='create'?[createLoanGroup(user,escrow,ESCROW_FUNDING,p),ESCROW_FUNDING,ESCROW_FUNDING]
-   :act.step==='addCollateral'?[addCollateralGroup(user,escrow,p),0n,0n]
-   :act.step==='depositCollateral'?[depositCollateralGroup(user,escrow,act.algo,p),act.algo,act.algo]
-   :act.step==='borrow'?[borrowGroup(user,escrow,act.usdc,p),0n,act.usdc]
-   :act.step==='repay'?[repayGroup(user,escrow,act.usdc,p),act.usdc,act.usdc]
-   :act.step==='releaseCollateral'?[reduceCollateralGroup(user,escrow,act.f,p),0n,act.f]
+   act.step==='create'?[createLoanGroup(user,escrow,ESCROW_FUNDING,p,kind),ESCROW_FUNDING,ESCROW_FUNDING]
+   :act.step==='addCollateral'?[addCollateralGroup(user,escrow,p,kind),0n,0n]
+   :act.step==='depositCollateral'?[depositCollateralGroup(user,escrow,act.algo,p,kind),act.algo,act.algo]
+   :act.step==='borrow'?[borrowGroup(user,escrow,act.usdc,p,kind),0n,act.usdc]
+   :act.step==='repay'?[repayGroup(user,escrow,act.usdc,p,kind),act.usdc,act.usdc]
+   :act.step==='releaseCollateral'?[reduceCollateralGroup(user,escrow,act.f,p,kind),0n,act.f]
    :(()=>{throw Error(`not a loan group: ${act.step}`);})();
-  const raw=encodeGroup(txns),problem=loanProblem(raw,user,escrow,maxPay);if(problem)throw Error(`Loan ${act.step} refused before signing: ${problem}`);
+  const raw=encodeGroup(txns),problem=loanProblem(raw,user,escrow,maxPay,kind);if(problem)throw Error(`Loan ${act.step} refused before signing: ${problem}`);
   const fees=txns.reduce((n,t)=>n+(typeof t.fee==='bigint'?t.fee:0n),0n);
   if(o.state.algo<o.state.minimum+100_000n+fees+(act.step==='create'?ESCROW_FUNDING:0n)+(act.step==='depositCollateral'?act.algo:0n))throw Error(`Not enough ALGO for loan ${act.step} and its fees`);
   const signed=raw.map((r,i)=>signRaw(r,fresh&&decodeTxn(r).snd instanceof Uint8Array&&encodeAddressKey(decodeTxn(r).snd as Uint8Array)===fresh.address?fresh.seed:keys.seed));
   const id=txid(decodeTxn(raw[0]));
-  if(act.step==='create'){trader.loan={escrow,created:false};await write(traderPath,trader);}
+  if(act.step==='create'){trader.loan={escrow,created:false,app:String(kind.app)};await write(traderPath,trader);}
   await write(lendingPath,{kind:`loan ${act.step}`,txid:id,lastValid:String(decodeTxn(raw[0]).lv),at:Date.now()});
   await submit(signed,DEFAULT_ALGOD);const round=await confirmed(id,DEFAULT_ALGOD);
   await unlink(lendingPath);
@@ -275,7 +284,8 @@ async function tick(live:boolean){
      lendingStep:o.lend??null,lendingBlocked:o.lendingBlocked??null,algo:String(o.state.algo),usdc:String(o.state.usdc),fusdc:o.fusdc===null?null:String(o.fusdc),lentUsdc:String(o.lent),
      lendRate:Number(o.lendRate)/1e16,convertibleAlgo:String(o.convertible),
      loan:{leverage:LEVERAGE,escrow:trader.loan?.escrow??null,ready:!!(trader.loan?.created&&trader.loan.collateralAdded),levered:!!trader.loan?.levered,
-      collateralAlgo:String(collateralAlgo),debtUsdc:String(o.loan.debt),health:o.loan.debt>0n?loanHealth(Number(collateralAlgo)/1e6,o.spot,Number(o.loan.debt)/1e6):null},
+      collateralAlgo:String(collateralAlgo),debtUsdc:String(o.loan.debt),health:o.loan.debt>0n?loanHealth(Number(collateralAlgo)/1e6,o.spot,Number(o.loan.debt)/1e6,kindOf(trader).collateralFactor):null,
+      kind:kindOf(trader).name,delevering:!!trader.loan?.delevering},
      valueUsd:Number(valueUsd.toFixed(6))});
     const hour=Math.floor(Date.now()/3600000);
     if(trader.equityHour!==hour){
@@ -316,7 +326,7 @@ async function checkLending(){
 if(process.argv.includes('--check-lending')){await checkLending();process.exit();}
 
 const live=process.argv.includes('--live'),once=process.argv.includes('--once');
-console.log(`Fund trader ${live?'LIVE':'dry run'}: buy below ${(1-DIP_RULE.drop)*100}% of the ${DIP_RULE.hours}-hour average, sell at the average; network fees up to ${FUND_FEE_CAP} µALGO; idle USDC lent on Folks; dip trades at ${LEVERAGE}x with a Folks loan.`);
+console.log(`Fund trader ${live?'LIVE':'dry run'}: buy below ${(1-DIP_RULE.drop)*100}% of the ${DIP_RULE.hours}-hour average, sell at the average; network fees up to ${FUND_FEE_CAP} µALGO; idle USDC lent on Folks; dip trades at ${LEVERAGE}x with a Folks ${LOAN_KIND.name} loan.`);
 do{
  try{await tick(live);}catch(error){console.error('Trader deferred:',(error as Error).message);if(once)process.exitCode=1;}
  if(!once)await new Promise(resolve=>setTimeout(resolve,300000));

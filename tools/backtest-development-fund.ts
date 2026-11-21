@@ -222,7 +222,13 @@ if(process.argv.includes('--daily')){
 if(process.argv.includes('--leverage')){
  const levels:[string,LoanTerms|undefined][]=[['no borrowing',undefined],['live 1.25x',LIVE_LOAN],
   ...[1.25,1.5,2].map(l=>[`general ${l}x`,{...FOLKS_GENERAL,leverage:l}] as [string,LoanTerms]),
-  ...[1.5,2,3,4].map(l=>[`ultraswap ${l}x`,{...FOLKS_ULTRASWAP_UP,leverage:l}] as [string,LoanTerms])];
+  ...[1.5,2,3,4].map(l=>[`ultraswap ${l}x`,{...FOLKS_ULTRASWAP_UP,leverage:l}] as [string,LoanTerms]),
+  // Self-deleveraging variants for the live 2x: below deleverHealth sell ALGO and repay back to deleverTo.
+  ...([[1.05,1.3],[1.1,1.4],[1.15,1.5]] as const).map(([h,to])=>[`ultraswap 2x d${h}`,{...FOLKS_ULTRASWAP_UP,leverage:2,entryHealth:1.5,deleverHealth:h,deleverTo:to}] as [string,LoanTerms]),
+  ['ultraswap 2x e1.5',{...FOLKS_ULTRASWAP_UP,leverage:2,entryHealth:1.5}],
+  // The general loan (Ultraswap takes no new ALGO collateral since its cap went to 0) with self-deleveraging.
+  ...([[1.5,1.6,1.15,1.4],[1.5,1.6,1.1,1.3],[1.75,1.35,1.1,1.3],[1.75,1.35,1.05,1.25],[2,1.25,1.08,1.2],[2,1.25,1.05,1.15]] as const)
+   .map(([l,e,h,to])=>[`general ${l}x e${e} d${h}`,{...FOLKS_GENERAL,leverage:l,entryHealth:e,deleverHealth:h,deleverTo:to,minTradeUsd:5}] as [string,LoanTerms])];
  const out:Record<string,unknown>={};
  const cut=Math.round((Date.parse('2024-11-18')/1000-algo.t[0])/3600),train=2*8760;
  console.log('A. Live rule with borrowing, ALGO 2019-2026 (IRR on money put in):');

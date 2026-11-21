@@ -106,44 +106,64 @@ test('loan state gives collateral and debt; debt grows with the borrow index; he
  assert.equal(loanHealth(100,0.1,5),1.3);assert.equal(loanHealth(100,0.1,0),Infinity);
 });
 
-import {LEVERAGE,BORROW_HEALTH,loanStep,type LoanView} from '../src/fundTrader.ts';
-test('a leveraged trade steps through setup, entry, holding, deleveraging and exit from the loan’s actual state',()=>{
- const idx=125_000_000_000_000n;// 1.25 ALGO per fALGO
+import {LEVERAGE,LOAN_KIND,BORROW_HEALTH,DELEVER_HEALTH,DELEVER_TO,loanStep,nextDelevering,viewHealth,type LoanView} from '../src/fundTrader.ts';
+test('a 2x trade levers up in rounds, sells down itself in a fall, and exits without breaching health',()=>{
+ const idx=125_000_000_000_000n,ALGO_PER_F=1.25;// 1.25 ALGO per fALGO
+ const fOf=(algo:number)=>BigInt(Math.round(algo/ALGO_PER_F*1e6));
+ const cf=LOAN_KIND.collateralFactor,show=(x:unknown)=>JSON.stringify(x,(_,v)=>typeof v==='bigint'?String(v):v);
+ assert.equal(LEVERAGE,2);assert.equal(LOAN_KIND.name,'general');assert.equal(cf,0.65);
  const base:LoanView={inTrade:false,levered:false,hasEscrow:false,collateralAdded:false,walletAlgo:0n,walletUsdc:0n,collateralF:0n,algoIndex:idx,debt:0n,price:0.08,tradeUsdc:0n,setupAffordable:false};
  assert.equal(loanStep(base),undefined,'no setup until it is affordable');
  assert.deepEqual(loanStep({...base,setupAffordable:true}),{step:'create'});
  assert.deepEqual(loanStep({...base,hasEscrow:true,setupAffordable:true}),{step:'addCollateral'});
  const ready={...base,hasEscrow:true,collateralAdded:true};
  assert.equal(loanStep(ready),undefined,'idle with a loan ready');
- // Entry: own 10 USDC bought 125 ALGO; it becomes collateral, then 2.5 USDC (0.25×) is borrowed and spent.
- const bought={...ready,inTrade:true,walletAlgo:125_000_000n,tradeUsdc:10_000_000n};
- assert.deepEqual(loanStep(bought),{step:'depositCollateral',algo:125_000_000n});
- const collateral={...bought,walletAlgo:0n,collateralF:100_000_000n};// 100 fALGO = 125 ALGO = $10
- assert.deepEqual(loanStep(collateral),{step:'borrow',usdc:2_500_000n});
- assert.equal(LEVERAGE,1.25);
- const borrowed={...collateral,levered:true,debt:2_500_000n,walletUsdc:2_500_000n};
- assert.deepEqual(loanStep(borrowed),{step:'leverBuy',usdc:2_500_000n});
- const holding={...borrowed,walletUsdc:0n,walletAlgo:31_000_000n};
- assert.equal(loanStep(holding),undefined,'holding: health 2.6');
- // ALGO falls 60%: health 125×0.032×0.65/2.5 = 1.04, so wallet ALGO is sold to bring health back to 1.6.
- const falling={...holding,price:0.032};
- const keep=BigInt(Math.floor(125*0.032*0.65/1.6*1e6)),cut=2_500_000n-keep;
- const d=loanStep(falling);
- assert.ok(d&&d.step==='sellAlgo'&&Math.abs(Number(d.algo)-Number(cut)/0.032*1.03)<2,`sells enough to repay the cut: ${JSON.stringify(d,(_,x)=>typeof x==='bigint'?String(x):x)}`);
- assert.deepEqual(loanStep({...falling,walletAlgo:0n,walletUsdc:1_000_000n}),{step:'repay',usdc:1_000_000n<cut+cut/50n?1_000_000n:cut+cut/50n});
- // Exit: wallet ALGO sold, then repay with a refunded margin, then release all collateral.
- const sold={...holding,inTrade:false,walletAlgo:0n,walletUsdc:3_000_000n};
- assert.deepEqual(loanStep(sold),{step:'repay',usdc:2_500_000n+2_500n+10n});
- assert.deepEqual(loanStep({...sold,debt:0n,walletUsdc:500_000n}),{step:'releaseCollateral',f:100_000_000n});
- assert.equal(loanStep({...sold,walletUsdc:0n,walletAlgo:5_000_000n}),undefined,'the sweep sells wallet ALGO before repaying');
- const r=loanStep({...sold,walletUsdc:0n});
- assert.ok(r&&r.step==='releaseCollateral'&&r.f<100_000_000n,'only enough collateral to cover the debt while it is owed');
- // Borrowing is capped at health 2.
- const thin={...collateral,collateralF:10_000_000n,tradeUsdc:10_000_000n};// $1 of collateral
- assert.equal(loanStep({...collateral,tradeUsdc:4_999_999n}),undefined,'no borrowing on a trade under $5');
- const capped=loanStep(thin);
- assert.ok(capped&&capped.step==='borrow'&&capped.usdc===BigInt(Math.floor(1*0.65/BORROW_HEALTH*1e6)));
- assert.equal(loanStep(collateral,1),undefined,'leverage 1 never borrows');
+ // Entry: own 10 USDC bought 125 ALGO ($10), which becomes collateral.
+ let v:LoanView={...ready,inTrade:true,walletAlgo:125_000_000n,tradeUsdc:10_000_000n};
+ assert.deepEqual(loanStep(v),{step:'depositCollateral',algo:125_000_000n});
+ v={...v,walletAlgo:0n,collateralF:fOf(125)};
+ const first=loanStep(v);
+ assert.ok(first&&first.step==='borrow'&&Math.abs(Number(first.usdc)-10*cf/BORROW_HEALTH*1e6)<2,`the first borrow is capped by health ${BORROW_HEALTH}: ${show(first)}`);
+ // Play the loop: borrow → buy → deposit, until the debt reaches the $10 target (2x of the own $10).
+ let rounds=0,deposits=0;
+ for(let step=loanStep(v);step;step=loanStep(v)){
+  assert.ok(++rounds<40,'the loop ends');
+  if(step.step==='borrow'){assert.ok(viewHealth({...v,debt:v.debt+step.usdc})>=BORROW_HEALTH-1e-3,`a borrow never goes below ${BORROW_HEALTH}`);v={...v,levered:true,debt:v.debt+step.usdc,walletUsdc:v.walletUsdc+step.usdc};}
+  else if(step.step==='leverBuy'){v={...v,walletUsdc:0n,walletAlgo:v.walletAlgo+BigInt(Math.floor(Number(step.usdc)/v.price))};}
+  else if(step.step==='depositCollateral'){deposits++;v={...v,walletAlgo:0n,collateralF:v.collateralF+fOf(Number(step.algo)/1e6)};}
+  else assert.fail(`unexpected step while levering up: ${show(step)}`);
+ }
+ assert.equal(v.debt,10_000_000n,'debt reaches exactly the target');
+ assert.ok(deposits>=2&&v.walletAlgo>0n,`several rounds, the last buy kept as a ready-to-sell buffer (${deposits} deposits)`);
+ const holding=v,h0=viewHealth(holding);
+ assert.ok(h0>=BORROW_HEALTH-0.01&&h0<BORROW_HEALTH+0.1,`holding at 2x: health ${h0.toFixed(3)}`);
+ // ALGO falls until health is under DELEVER_HEALTH: the buffer is sold first, then the USDC repaid …
+ const falling={...holding,price:holding.price*(DELEVER_HEALTH-0.01)/h0};
+ assert.ok(viewHealth(falling)<DELEVER_HEALTH&&nextDelevering(viewHealth(falling),false));
+ assert.deepEqual(loanStep(falling),{step:'sellAlgo',algo:holding.walletAlgo});
+ const sold={...falling,walletAlgo:0n,walletUsdc:300_000n};
+ const collateralUsd=Number((sold.collateralF*idx)/10n**14n)/1e6*sold.price,keep=BigInt(Math.floor(collateralUsd*cf/DELEVER_TO*1e6)),cut=10_000_000n-keep;
+ assert.deepEqual(loanStep(sold),{step:'repay',usdc:300_000n<cut+cut/50n?300_000n:cut+cut/50n});
+ // … then, with nothing loose, collateral is released only down to health 1.02, and the sell-down continues to DELEVER_TO.
+ const repaid={...sold,walletUsdc:0n,debt:9_700_000n,delevering:true};
+ const rel=loanStep(repaid);assert.ok(rel&&rel.step==='releaseCollateral',show(rel));
+ const after={...repaid,collateralF:repaid.collateralF-(rel as {f:bigint}).f};
+ assert.ok(Math.abs(viewHealth(after)-1.02)<0.002,`release leaves health at 1.02: ${viewHealth(after)}`);
+ assert.equal(loanStep({...repaid,delevering:false,price:repaid.price*1.04}),undefined,'recovered above the trigger and not mid sell-down: hold');
+ assert.ok(nextDelevering(DELEVER_TO-0.01,true)&&!nextDelevering(DELEVER_TO+0.01,true)&&!nextDelevering(DELEVER_HEALTH+0.01,false),'a sell-down runs from the trigger to DELEVER_TO');
+ // Exit: repay what the wallet holds, then release collateral in healthy steps.
+ const exit={...holding,inTrade:false,walletAlgo:0n,walletUsdc:3_000_000n};
+ assert.deepEqual(loanStep(exit),{step:'repay',usdc:3_000_000n});
+ const ex2={...exit,walletUsdc:0n};
+ const e2=loanStep(ex2);assert.ok(e2&&e2.step==='releaseCollateral');
+ assert.ok(viewHealth({...ex2,collateralF:ex2.collateralF-(e2 as {f:bigint}).f})>=1.0199,'an exit release never takes health below 1.02');
+ assert.deepEqual(loanStep({...exit,debt:0n,walletUsdc:500_000n}),{step:'releaseCollateral',f:exit.collateralF});
+ assert.equal(loanStep({...ex2,walletAlgo:5_000_000n}),undefined,'the sweep sells wallet ALGO before repaying');
+ // Small trades and leverage 1 never borrow; another loan type uses its own factor.
+ const r1={...ready,inTrade:true,tradeUsdc:10_000_000n,collateralF:fOf(125)};
+ assert.equal(loanStep({...r1,tradeUsdc:4_999_999n}),undefined,'no borrowing on a trade under $5');
+ assert.equal(loanStep(r1,1),undefined,'leverage 1 never borrows');
+ const us=loanStep(r1,2,0.825);assert.ok(us&&us.step==='borrow'&&Math.abs(Number(us.usdc)-10*0.825/BORROW_HEALTH*1e6)<2,'collateral factor is per loan type');
 });
 
 import {nextMove} from '../src/fundTrader.ts';
@@ -159,4 +179,23 @@ test('the trader protects a loan first, frees lent USDC before buying, trades, t
  assert.deepEqual(nextMove({...base,inTrade:true,loanAct:{step:'leverBuy',usdc:4n}}),{kind:'swap',buy:4n});
  assert.deepEqual(nextMove({...base,lend:'deposit'}),{kind:'lending',step:'deposit'});
  assert.equal(nextMove(base),undefined);
+});
+
+import {GENERAL_LOAN,ULTRASWAP_UP_LOAN,loanKindFor} from '../src/fundLoan.ts';
+test('Ultraswap loan groups call its own app with its own pool slots, and the check holds each group to its loan type',()=>{
+ const me=walletKeys(generateSecretKey()).address,escrow=walletKeys(generateSecretKey()).address;
+ const p={firstValid:1000n,genesisID:'mainnet-v1.0',genesisHash:algosdk.base64ToBytes(MAINNET_GENESIS_HASH)};
+ const bor=borrowGroup(me,escrow,1_000_000n,p,ULTRASWAP_UP_LOAN),call=bor[2];
+ assert.equal(call.apid,1202382736n);assert.equal((call.apaa as Uint8Array[])[7][0],0,'USDC is slot 0 in the Ultraswap loan');
+ const add=addCollateralGroup(me,escrow,p,ULTRASWAP_UP_LOAN)[0];
+ assert.equal(add.apid,1202382736n);assert.equal((add.apaa as Uint8Array[])[5][0],1,'ALGO is slot 1 in the Ultraswap loan');
+ assert.equal((addCollateralGroup(me,escrow,p)[0].apaa as Uint8Array[])[5][0],0,'ALGO is slot 0 in the general loan');
+ const create=createLoanGroup(me,escrow,828_500n,p,ULTRASWAP_UP_LOAN);
+ assert.ok(Buffer.from(create[2].rekey as Uint8Array).equals(Buffer.from(algosdk.decodeAddress(applicationAddress(1202382736n)).publicKey)),'the escrow is handed to the Ultraswap loan app');
+ assert.equal(loanProblem(encodeGroup(bor),me,escrow,1_000_000n,ULTRASWAP_UP_LOAN),undefined);
+ assert.equal(loanProblem(encodeGroup(create),me,escrow,828_500n,ULTRASWAP_UP_LOAN),undefined);
+ assert.match(loanProblem(encodeGroup(bor),me,escrow,1_000_000n,GENERAL_LOAN)??'',/unexpected app/,'a group for one loan type fails the other type’s check');
+ assert.match(loanProblem(encodeGroup(create),me,escrow,828_500n,GENERAL_LOAN)??'',/unexpected|hand itself/,'and the creation is refused too');
+ assert.equal(loanKindFor(undefined),GENERAL_LOAN,'escrows from before the switch are general loans');
+ assert.equal(loanKindFor('1202382736'),ULTRASWAP_UP_LOAN);
 });
