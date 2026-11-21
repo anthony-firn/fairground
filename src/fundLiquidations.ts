@@ -150,38 +150,58 @@ export const FOLKS_ALGO_POOL_APP = 971368268n, FOLKS_USDC_POOL_APP = 971372237n,
 /** The USDC pool's flash-loan fee, 0.1% (pool interest parameter 1e13 / 1e16, mainnet 2026-11-20). */
 export const flashRepayment = (amount: bigint): bigint => amount + (amount * 10n ** 13n) / 10n ** 16n + 1n;
 
+export const XALGO = 1134696561, FXALGO = 2611138444, FUSDC = 971384592, FOLKS_XALGO_POOL_APP = 2611131944n;
+/** What a flash liquidation repays and what it is paid in: the debt is flash-borrowed from its pool and repaid on the
+ * loan; the collateral arrives as the pool's fAsset, is withdrawn, and is swapped back to the debt asset. 0 is ALGO.
+ * Every Folks pool here charges the same 0.1% flash-loan fee (interest parameter 1e13 / 1e16, mainnet 2026-11-21). */
+export interface FlashRoute { name: string; debtPool: bigint; debtAsset: number; colPool: bigint; colAsset: number; colFAsset: number }
+export const ROUTES: Record<string, FlashRoute> = {
+  usdcAlgo: {name: 'USDC debt / ALGO collateral', debtPool: FOLKS_USDC_POOL_APP, debtAsset: USDC, colPool: FOLKS_ALGO_POOL_APP, colAsset: 0, colFAsset: FALGO},
+  usdcXalgo: {name: 'USDC debt / xALGO collateral', debtPool: FOLKS_USDC_POOL_APP, debtAsset: USDC, colPool: FOLKS_XALGO_POOL_APP, colAsset: XALGO, colFAsset: FXALGO},
+  algoXalgo: {name: 'ALGO debt / xALGO collateral', debtPool: FOLKS_ALGO_POOL_APP, debtAsset: 0, colPool: FOLKS_XALGO_POOL_APP, colAsset: XALGO, colFAsset: FXALGO},
+  algoUsdc: {name: 'ALGO debt / USDC collateral', debtPool: FOLKS_ALGO_POOL_APP, debtAsset: 0, colPool: FOLKS_USDC_POOL_APP, colAsset: USDC, colFAsset: FUSDC},
+};
+
 export interface FlashLiquidationArgs {
   liquidator: string; escrow: string; loanApp: bigint; loanAssets: number[];
-  /** µUSDC flash-borrowed and repaid on the loan; µfALGO withdrawn as ALGO (also the liquidation's minimum). */
+  /** Debt base units flash-borrowed and repaid on the loan; collateral fAsset units withdrawn from its pool. */
   repay: bigint; fWithdraw: bigint; budget: number;
-  /** The liquidate call's minimum fALGO to the liquidator (at most fWithdraw). */
+  /** The liquidate call's minimum fAsset to the liquidator (at most fWithdraw). */
   minCollateral: bigint;
-  /** Opt the wallet in to fALGO as the group's first transaction (only the first liquidation needs it). */
+  /** The pair (default USDC debt / ALGO collateral). */
+  route?: FlashRoute;
+  /** Assets to opt the wallet in to, as the group's first transactions (the first liquidation of a route needs them). */
+  optIns?: number[];
+  /** Shorthand for optIns = [the route's fAsset]. */
   optIn?: boolean;
 }
-/** One atomic group that needs no capital: flash-borrow USDC, liquidate an ALGO-collateral loan, withdraw the fALGO as
- * ALGO, swap it to USDC through the router (`router`: its prepared transactions for that ALGO, minimum output covering
- * the repayment), and repay the flash loan. If any step comes up short the whole group fails and costs nothing. */
+const routeOf = (a: FlashLiquidationArgs) => a.route ?? ROUTES.usdcAlgo;
+const optInsOf = (a: FlashLiquidationArgs) => a.optIns ?? (a.optIn ? [routeOf(a).colFAsset] : []);
+
+/** One atomic group that needs no capital: flash-borrow the debt asset, liquidate, withdraw the collateral, swap it back
+ * through the router (`router`: its prepared transactions for `colAsset` → `debtAsset`, minimum output covering the
+ * repayment), and repay the flash loan. If any step comes up short the whole group fails and costs nothing. */
 export function flashLiquidationGroup(a: FlashLiquidationArgs, router: Txn[], p: LoanParams): Txn[] {
-  const fv = router[0]?.fv as bigint ?? p.firstValid, lv = fv + 20n;
+  const r = routeOf(a), fv = router[0]?.fv as bigint ?? p.firstValid, lv = fv + 20n;
   const head = (fee: bigint): Txn => ({snd: addressKey(a.liquidator), fee, fv, lv, gen: p.genesisID, gh: p.genesisHash});
-  const usdcPool = addressKey(applicationAddress(FOLKS_USDC_POOL_APP)), algoPool = addressKey(applicationAddress(FOLKS_ALGO_POOL_APP));
+  const debtPool = addressKey(applicationAddress(r.debtPool)), colPool = addressKey(applicationAddress(r.colPool));
+  const send = (amt: bigint): Txn => r.debtAsset === 0 ? {...head(1000n), type: 'pay', rcv: debtPool, amt} : {...head(1000n), type: 'axfer', arcv: debtPool, xaid: BigInt(r.debtAsset), aamt: amt};
   const q = {...p, firstValid: fv};
   const middle: Txn[] = [
     opUp(a.liquidator, a.budget, q),
     refreshPrices(a.liquidator, a.loanAssets, q),
-    {...head(1000n), type: 'axfer', arcv: usdcPool, xaid: BigInt(USDC), aamt: a.repay},
+    send(a.repay),
     {...head(9000n), type: 'appl', apid: a.loanApp, apaa: [LIQUIDATE, u8(1), u8(2), u8(0), u8(1), u64(a.minCollateral), u8(0), u8(1), u8(2), u8(3), u8(4)],
-      apat: [addressKey(a.escrow), addressKey(FOLKS_RESERVE)], apas: [BigInt(USDC), BigInt(FALGO)], apfa: [FOLKS_ALGO_POOL_APP, FOLKS_USDC_POOL_APP, FOLKS_POOL_MANAGER, FOLKS_ORACLE_ADAPTER]},
-    {...head(1000n), type: 'axfer', arcv: algoPool, xaid: BigInt(FALGO), aamt: a.fWithdraw},
-    {...head(4000n), type: 'appl', apid: FOLKS_ALGO_POOL_APP, apaa: [POOL_WITHDRAW, u64(0n), u8(0), u8(0), u8(1), u8(1)], apas: [0n, BigInt(FALGO)], apfa: [FOLKS_POOL_MANAGER]},
+      apat: [addressKey(a.escrow), addressKey(FOLKS_RESERVE)], apas: [BigInt(r.debtAsset), BigInt(r.colFAsset)], apfa: [r.colPool, r.debtPool, FOLKS_POOL_MANAGER, FOLKS_ORACLE_ADAPTER]},
+    {...head(1000n), type: 'axfer', arcv: colPool, xaid: BigInt(r.colFAsset), aamt: a.fWithdraw},
+    {...head(4000n), type: 'appl', apid: r.colPool, apaa: [POOL_WITHDRAW, u64(0n), u8(0), u8(0), u8(1), u8(1)], apas: [BigInt(r.colAsset), BigInt(r.colFAsset)], apfa: [FOLKS_POOL_MANAGER]},
     ...router.map((t) => ({...t, fv, lv, grp: undefined, lx: undefined})),
-    {...head(1000n), type: 'axfer', arcv: usdcPool, xaid: BigInt(USDC), aamt: flashRepayment(a.repay)},
+    send(flashRepayment(a.repay)),
   ];
-  const lead: Txn[] = a.optIn ? [{...head(1000n), type: 'axfer', arcv: addressKey(a.liquidator), xaid: BigInt(FALGO)}] : [];
+  const lead: Txn[] = optInsOf(a).map((asset) => ({...head(1000n), type: 'axfer', arcv: addressKey(a.liquidator), xaid: BigInt(asset)}));
   const endIndex = BigInt(lead.length + middle.length + 1);
-  const begin: Txn = {...head(2000n), type: 'appl', apid: FOLKS_USDC_POOL_APP, apaa: [FLASH_BEGIN, u64(a.repay), u64(endIndex), u8(0), u8(0)], apas: [BigInt(USDC)]};
-  const end: Txn = {...head(2000n), type: 'appl', apid: FOLKS_USDC_POOL_APP, apaa: [FLASH_END, u8(1), u8(0)], apat: [addressKey(FOLKS_RESERVE)], apas: [BigInt(USDC)]};
+  const begin: Txn = {...head(2000n), type: 'appl', apid: r.debtPool, apaa: [FLASH_BEGIN, u64(a.repay), u64(endIndex), u8(0), u8(0)], apas: [BigInt(r.debtAsset)]};
+  const end: Txn = {...head(2000n), type: 'appl', apid: r.debtPool, apaa: [FLASH_END, u8(1), u8(0)], apat: [addressKey(FOLKS_RESERVE)], apas: [BigInt(r.debtAsset)]};
   const txns = [...lead, begin, ...middle, end];
   assignGroup(txns);
   return txns;
@@ -190,24 +210,32 @@ export function flashLiquidationGroup(a: FlashLiquidationArgs, router: Txn[], p:
 const ROUTER_APP_ID = 3279848327n;
 const same = (x: unknown, y: Uint8Array) => x instanceof Uint8Array && x.length === y.length && x.every((v, i) => v === y[i]);
 const hex = (b: unknown) => (b instanceof Uint8Array ? [...b].map((x) => x.toString(16).padStart(2, '0')).join('') : '');
-/** Why a flash liquidation group shouldn't be signed. `minOut` is the least USDC the router step may deliver. */
-export function flashLiquidationProblem(txns: Txn[], a: FlashLiquidationArgs, algoIn: bigint, minOut: bigint): string | undefined {
+/** Why a flash liquidation group shouldn't be signed. `swapIn` is the collateral sent to the router and `minOut` the
+ * least of the debt asset its last step may deliver. */
+export function flashLiquidationProblem(txns: Txn[], a: FlashLiquidationArgs, swapIn: bigint, minOut: bigint): string | undefined {
+  const r = routeOf(a), opt = optInsOf(a), repayment = flashRepayment(a.repay);
   const me = addressKey(a.liquidator), genesis = base64.decode('wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=');
-  const allowedApps = new Set([FOLKS_USDC_POOL_APP, FOLKS_ALGO_POOL_APP, a.loanApp, FOLKS_ORACLE_ADAPTER, ROUTER_APP_ID, 1167143153n]);
-  const usdcPool = addressKey(applicationAddress(FOLKS_USDC_POOL_APP)), algoPool = addressKey(applicationAddress(FOLKS_ALGO_POOL_APP)), router = addressKey(applicationAddress(ROUTER_APP_ID));
-  if (txns.length < 10 || txns.length > 16) return 'unexpected number of transactions';  // Algorand's group limit
+  const allowedApps = new Set([r.debtPool, r.colPool, a.loanApp, FOLKS_ORACLE_ADAPTER, ROUTER_APP_ID, 1167143153n]);
+  const debtPool = addressKey(applicationAddress(r.debtPool)), colPool = addressKey(applicationAddress(r.colPool)), router = addressKey(applicationAddress(ROUTER_APP_ID));
+  if (r.debtAsset === r.colAsset) return 'the route repays and receives the same asset';
+  if (txns.length < 10 + opt.length || txns.length > 16) return 'unexpected number of transactions';  // Algorand's group limit
   let fees = 0n;
-  for (const t of txns) {
+  for (const [i, t] of txns.entries()) {
     if (!same(t.snd, me)) return 'a transaction isn’t from this wallet';
     if (t.rekey !== undefined || t.close !== undefined || t.aclose !== undefined || t.asnd !== undefined) return 'a transaction would hand over or empty the wallet';
     if (t.gen !== 'mainnet-v1.0' || !same(t.gh, genesis)) return 'not on Algorand mainnet';
     if (!same(t.grp, txns[0].grp as Uint8Array)) return 'the transactions aren’t one group';
     if (t.type === 'appl' && (!allowedApps.has(t.apid as bigint) || t.apan !== undefined || t.apap !== undefined || t.apsu !== undefined)) return 'a call to an unexpected app';
-    if (t.type === 'pay' && !(same(t.rcv, router) && t.amt === algoIn)) return 'an ALGO payment goes somewhere unexpected';
+    if (t.type === 'pay') {
+      const ok = (r.debtAsset === 0 && same(t.rcv, debtPool) && (t.amt === a.repay || t.amt === repayment))
+        || (r.colAsset === 0 && same(t.rcv, router) && t.amt === swapIn);
+      if (!ok) return 'an ALGO payment goes somewhere unexpected';
+    }
     if (t.type === 'axfer') {
-      const ok = (a.optIn === true && t === txns[0] && same(t.arcv, me) && t.xaid === BigInt(FALGO) && (t.aamt === undefined || t.aamt === 0n))
-        || (same(t.arcv, usdcPool) && t.xaid === BigInt(USDC) && (t.aamt === a.repay || t.aamt === flashRepayment(a.repay)))
-        || (same(t.arcv, algoPool) && t.xaid === BigInt(FALGO) && t.aamt === a.fWithdraw);
+      const ok = (i < opt.length && opt[i] !== undefined && t.xaid === BigInt(opt[i]) && same(t.arcv, me) && (t.aamt === undefined || t.aamt === 0n))
+        || (r.debtAsset !== 0 && same(t.arcv, debtPool) && t.xaid === BigInt(r.debtAsset) && (t.aamt === a.repay || t.aamt === repayment))
+        || (same(t.arcv, colPool) && t.xaid === BigInt(r.colFAsset) && t.aamt === a.fWithdraw)
+        || (r.colAsset !== 0 && same(t.arcv, router) && t.xaid === BigInt(r.colAsset) && t.aamt === swapIn);
       if (!ok) return 'an asset transfer goes somewhere unexpected';
     }
     if (!['appl', 'pay', 'axfer'].includes(String(t.type))) return 'unexpected transaction type';
@@ -217,15 +245,15 @@ export function flashLiquidationProblem(txns: Txn[], a: FlashLiquidationArgs, al
   const copy = txns.map((x) => ({...x}));
   assignGroup(copy);
   if (!same(copy[0].grp, txns[0].grp as Uint8Array)) return 'the transactions aren’t one group';
-  const [begin, end] = [txns[a.optIn ? 1 : 0], txns[txns.length - 1]];
-  if (begin.apid !== FOLKS_USDC_POOL_APP || hex((begin.apaa as Uint8Array[])[0]) !== hex(FLASH_BEGIN) || hex((begin.apaa as Uint8Array[])[1]) !== hex(u64(a.repay))
+  const [begin, end] = [txns[opt.length], txns[txns.length - 1]];
+  if (begin.apid !== r.debtPool || hex((begin.apaa as Uint8Array[])[0]) !== hex(FLASH_BEGIN) || hex((begin.apaa as Uint8Array[])[1]) !== hex(u64(a.repay))
     || hex((begin.apaa as Uint8Array[])[2]) !== hex(u64(BigInt(txns.length - 1)))) return 'the flash loan doesn’t borrow the repayment or point at its end';
-  if (end.apid !== FOLKS_USDC_POOL_APP || hex((end.apaa as Uint8Array[])[0]) !== hex(FLASH_END)) return 'the group doesn’t end by repaying the flash loan';
+  if (end.apid !== r.debtPool || hex((end.apaa as Uint8Array[])[0]) !== hex(FLASH_END)) return 'the group doesn’t end by repaying the flash loan';
   const routerCalls = txns.filter((t) => t.apid === ROUTER_APP_ID);
   const last = routerCalls[routerCalls.length - 1];
   const args = (last?.apaa ?? []) as Uint8Array[];
-  if (!last || hex(args[0]) !== '7dde205e' || num(args[1], 0, 8) !== BigInt(USDC) || num(args[2], 0, 8) < minOut) return 'the swap doesn’t guarantee enough USDC back';
-  if (minOut < flashRepayment(a.repay)) return 'the swap’s minimum would not repay the flash loan';
+  if (!last || hex(args[0]) !== '7dde205e' || num(args[1], 0, 8) !== BigInt(r.debtAsset) || num(args[2], 0, 8) < minOut) return 'the swap doesn’t guarantee enough back';
+  if (minOut < repayment) return 'the swap’s minimum would not repay the flash loan';
   return undefined;
 }
 

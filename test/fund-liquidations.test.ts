@@ -5,7 +5,7 @@ import {generateSecretKey} from 'nostr-tools/pure';
 import {addressKey,applicationAddress,assignGroup,type Txn} from '../src/algotx.ts';
 import {walletKeys} from '../src/wallet.ts';
 import {MAINNET_GENESIS_HASH} from '../src/rails/algorand.ts';
-import {FALGO,FOLKS_LOANS,USDC,algoToKeep,assessLoan,blockedAssets,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,liquidatorShare,
+import {FALGO,FOLKS_LOANS,ROUTES,USDC,XALGO,FXALGO,algoToKeep,assessLoan,blockedAssets,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,liquidatorShare,
  parseLoanLocal,parseLoanTerms,parseOracle,parsePoolIndexes,type KV} from '../src/fundLiquidations.ts';
 
 const me=walletKeys(generateSecretKey()).address,escrow=walletKeys(generateSecretKey()).address;
@@ -70,7 +70,7 @@ test('the flash liquidation check passes our group and refuses anything that lea
  assert.match(flashLiquidationProblem(tamper(4,t=>{t.apid=123n;}),args,algoIn,minOut)??'',/unexpected app/);
  assert.match(flashLiquidationProblem(tamper(0,t=>{(t.apaa as Uint8Array[])[1]=words([99n]);}),args,algoIn,minOut)??'',/flash loan/);
  assert.match(flashLiquidationProblem(txns,args,algoIn,flashRepayment(args.repay)-1n)??'',/would not repay/);
- assert.match(flashLiquidationProblem(txns,args,algoIn,60_000n)??'',/enough USDC/,'the router minimum must be what we checked');
+ assert.match(flashLiquidationProblem(txns,args,algoIn,60_000n)??'',/enough back/,'the router minimum must be what we checked');
  const t2=txns.map(x=>structuredClone(x));t2[3].note=new Uint8Array([1]);
  assert.match(flashLiquidationProblem(t2,args,algoIn,minOut)??'',/one group/);
  assert.equal(FALGO,971381860);
@@ -112,4 +112,22 @@ test('a group over Algorand’s 16-transaction limit is refused, and a full 16 s
  assert.equal(pad(3).length,16);assert.equal(flashLiquidationProblem(pad(3),args,algoIn,minOut),undefined);
  assert.match(flashLiquidationProblem(pad(4),args,algoIn,minOut)??'',/number of transactions/);
  assert.equal(pad(3).map(encodeTxn).length,16);
+});
+
+test('other routes: xALGO collateral swaps in by asset transfer, ALGO debt is flash-borrowed and repaid in ALGO',()=>{
+ const router=addressKey(applicationAddress(3279848327n)),u64=(n:bigint)=>words([n]);
+ const head=(fee:bigint):Txn=>({snd:addressKey(me),fee,fv:1000n,lv:1020n,gen:'mainnet-v1.0',gh:params.genesisHash});
+ const swap=(out:number,min:bigint):Txn[]=>[{...head(3000n),type:'axfer',arcv:router,xaid:BigInt(XALGO),aamt:700_000n},
+  {...head(14000n),type:'appl',apid:3279848327n,apaa:[Buffer.from('f06714c8','hex'),u64(0n)]},
+  {...head(0n),type:'appl',apid:3279848327n,apaa:[Buffer.from('7dde205e','hex'),u64(BigInt(out)),u64(min),u64(0n),addressKey(me)]}];
+ for(const [route,out,repay,min] of [[ROUTES.usdcXalgo,USDC,52_000n,54_000n],[ROUTES.algoXalgo,0,600_000n,650_000n]] as const){
+  const args={liquidator:me,escrow,loanApp:FOLKS_LOANS.algoEfficiency,loanAssets:[0,XALGO],repay,fWithdraw:500_000n,minCollateral:500_000n,budget:8,route,optIns:[FXALGO,XALGO]};
+  const txns=flashLiquidationGroup(args,swap(out,min),params);
+  assert.equal(txns.length,14);assert.equal(flashLiquidationProblem(txns,args,700_000n,min),undefined,route.name);
+  assert.equal(txns[2].apid,route.debtPool,'the flash loan comes from the debt pool');
+  if(route.debtAsset===0)assert.ok(txns.some(t=>t.type==='pay'&&t.amt===flashRepayment(repay)),'ALGO repayment by payment');
+  const t=txns.map(x=>structuredClone(x));const i=t.findIndex(x=>x.type==='axfer'&&x.xaid===BigInt(XALGO)&&x.aamt===700_000n);t[i].aamt=800_000n;assignGroup(t);
+  assert.match(flashLiquidationProblem(t,args,700_000n,min)??'',/asset transfer/,'sending more collateral to the router than checked is refused');
+  assert.match(flashLiquidationProblem(txns,{...args,optIns:[FXALGO]},700_000n,min)??'',/asset transfer|flash loan/,'an unrequested opt-in is refused');
+ }
 });

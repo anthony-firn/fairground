@@ -1,13 +1,16 @@
 /**
- * Capital-free liquidations of Folks Finance V2 general loans (src/fundLiquidations.ts): flash-borrow USDC, repay part
- * of an underwater loan's USDC debt, receive its ALGO collateral at the liquidation bonus, swap it back to USDC and
- * repay the flash loan, all in one atomic group; the profit stays in the fund's wallet (where the trader lends it).
+ * Capital-free liquidations of Folks Finance V2 loans of every type (src/fundLiquidations.ts ROUTES: USDC or ALGO
+ * debt, ALGO, xALGO or USDC collateral): flash-borrow the debt asset, repay part of an underwater loan, receive its
+ * collateral at the liquidation bonus, swap it back and repay the flash loan, all in one atomic group; the profit stays
+ * in the fund's wallet (where the trader lends it).
  *
  *   node tools/liquidate-loans.ts [--live] [--every SECONDS]
  *
- * Each candidate is built, checked (flashLiquidationProblem) and simulated on mainnet before anything is signed; a
- * group that loses a race simply fails and costs nothing. Without --live it only reports what it would do. Create
- * ~/.local/share/evolve-bootstrap/treasury/PAUSE to stop. Logs: ~/.local/share/evolve-bootstrap/liquidations/.
+ * It wakes on every new block (or every SECONDS), re-values the cached loans when oracle prices change, and acts on
+ * those that guarantee at least $0.01 beyond fees. Every group is checked (flashLiquidationProblem) before signing; in
+ * live mode it is sent without simulating first, since a group that fails or loses a race costs nothing. Without --live
+ * it simulates and reports what it would do. Create ~/.local/share/evolve-bootstrap/treasury/PAUSE to stop. Logs:
+ * ~/.local/share/evolve-bootstrap/liquidations/.
  */
 import {access,appendFile,mkdir,readFile,lstat,writeFile} from 'node:fs/promises';
 import {homedir} from 'node:os';
@@ -17,10 +20,10 @@ import {confirmed,DEFAULT_ALGOD,submit,suggestedParams,walletKeys,walletState,ty
 import {decodeTxn,encodeTxn,signTxn,txid} from '../src/algotx.ts';
 import {simulate} from '../src/fundLending.ts';
 import {minReceive,prepareSwap,quoteSwap} from '../src/swap.ts';
-import {FALGO,FOLKS_ALGO_POOL_APP,algoToKeep,blockedAssets,FOLKS_LOANS,FOLKS_ORACLE_0,USD,USDC,assessLoan,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,
- liquidatorShare,parseLoanLocal,parseLoanTerms,parseOracle,parsePoolIndexes,type KV,type LoanLocal,type PoolTerms} from '../src/fundLiquidations.ts';
+import {ROUTES,algoToKeep,blockedAssets,FOLKS_LOANS,FOLKS_ORACLE_0,assessLoan,bestLiquidation,flashLiquidationGroup,flashLiquidationProblem,flashRepayment,
+ liquidatorShare,parseLoanLocal,parseLoanTerms,parseOracle,parsePoolIndexes,type FlashRoute,type KV,type LoanLocal,type PoolTerms} from '../src/fundLiquidations.ts';
 
-const IDX='https://mainnet-idx.4160.nodely.dev',PM=971350278n,LOAN=FOLKS_LOANS.general;
+const IDX='https://mainnet-idx.4160.nodely.dev',PM=971350278n;
 /** Net profit a liquidation must guarantee beyond its network fees, in USD. */
 const MIN_PROFIT_USD=0.01;
 /** OpUp inner calls: the whole group used 8,448 of 19,600 in simulation; 8 leaves ~1,700 to spare. */
@@ -55,88 +58,134 @@ async function ownerKeys():Promise<WalletKeys>{
  return keys;
 }
 
-let loans=new Map<string,LoanLocal>(),loansAt=0,terms=new Map<bigint,PoolTerms>(),termsAt=0;
+const LOAN_APPS=Object.values(FOLKS_LOANS);
+interface Loan {app:bigint;local:LoanLocal}
+let loans=new Map<string,Loan>(),loansAt=0,termsByApp=new Map<bigint,Map<bigint,PoolTerms>>(),termsAt=0,lastOracle='',lastFull=0;
+/** Loans within 25% of liquidation at the last full pass: between full passes (every 5 minutes) only these are re-valued. */
+let watch=new Set<string>();
 const failedAt=new Map<string,number>();
 async function refreshLoans(){
- const next=new Map<string,LoanLocal>();let token:string|undefined;
- do{
-  const page=await get(`${IDX}/v2/accounts?application-id=${LOAN}&limit=1000&exclude=assets,created-assets,created-apps${token?`&next=${token}`:''}`);
-  for(const a of page.accounts??[]){const st=(a['apps-local-state']??[]).find((x:{id:number})=>BigInt(x.id)===LOAN)?.['key-value'];if(st)next.set(a.address,parseLoanLocal(st));}
-  token=page['next-token'];
- }while(token);
+ const next=new Map<string,Loan>();
+ for(const app of LOAN_APPS){
+  let token:string|undefined;
+  do{
+   const page=await get(`${IDX}/v2/accounts?application-id=${app}&limit=1000&exclude=assets,created-assets,created-apps${token?`&next=${token}`:''}`);
+   for(const a of page.accounts??[]){const st=(a['apps-local-state']??[]).find((x:{id:number})=>BigInt(x.id)===app)?.['key-value'];if(st)next.set(a.address,{app,local:parseLoanLocal(st)});}
+   token=page['next-token'];
+  }while(token);
+ }
  loans=next;loansAt=Date.now();
 }
+/** USD value of `amount` base units at an oracle price (USD per base unit × 1e14). */
+const usd=(amount:bigint,price:bigint)=>Number(amount*price/10n**8n)/1e6;
 
-interface Candidate {escrow:string;repay:bigint;f:bigint;fWithdraw:bigint;algoIn:bigint;expectedProfitUsd:number;loanAssets:number[]}
+interface Candidate {escrow:string;app:bigint;route:FlashRoute;repay:bigint;fWithdraw:bigint;colOut:bigint;expectedProfitUsd:number;loanAssets:number[]}
 async function tick(live:boolean){
  const now=BigInt(Math.floor(Date.now()/1000));
- if(Date.now()-termsAt>600_000){terms=parseLoanTerms(await gs(LOAN));termsAt=Date.now();}
- if(Date.now()-loansAt>60_000)await refreshLoans();
- const [pools,prices]=await Promise.all([gs(PM).then(s=>parsePoolIndexes(s,now)),gs(FOLKS_ORACLE_0).then(parseOracle)]);
- const algoPrice=prices.get(0n)!.price,dii=pools.get(FOLKS_ALGO_POOL_APP)!.depositIndex,algoTerms=terms.get(FOLKS_ALGO_POOL_APP)!;
- const cands:Candidate[]=[];let blocked=0;
- for(const [escrow,local] of loans){
-  if((failedAt.get(escrow)??0)>Date.now()-300_000)continue;
-  const h=assessLoan(local,terms,pools,prices,now);if(!h.liquidatable)continue;
-  const usdcDebt=h.borrows.find(b=>b.asset===BigInt(USDC)),algoCol=h.collateral.find(c=>c.asset===0n);if(!usdcDebt||!algoCol)continue;
-  const best=bestLiquidation({...h,borrows:[usdcDebt],collateral:[algoCol]},terms);if(!best||best.repay<=0n)continue;
+ if(Date.now()-termsAt>600_000){for(const app of LOAN_APPS)termsByApp.set(app,parseLoanTerms(await gs(app)));termsAt=Date.now();}
+ const refreshed=Date.now()-loansAt>300_000;
+ if(refreshed)await refreshLoans();
+ const [pmState,oracleState]=await Promise.all([gs(PM),gs(FOLKS_ORACLE_0)]);
+ // Health only moves when oracle prices change (or, slowly, with interest). Every block with new prices re-values the
+ // loans near the line; all loans are re-valued with each cache refresh (every 5 minutes).
+ const oracleKey=JSON.stringify(oracleState),full=refreshed||Date.now()-lastFull>300_000;
+ if(oracleKey===lastOracle&&!full)return;
+ lastOracle=oracleKey;if(full)lastFull=Date.now();
+ const nextWatch=new Set<string>();
+ const pools=parsePoolIndexes(pmState,now),prices=parseOracle(oracleState),algoPrice=prices.get(0n)!.price;
+ const cands:Candidate[]=[];let blocked=0,liquidatable=0;
+ for(const [escrow,{app,local}] of loans){
+  if(!full&&!watch.has(escrow))continue;
+  if((failedAt.get(escrow)??0)>Date.now()-300_000){nextWatch.add(escrow);continue;}
+  const terms=termsByApp.get(app);if(!terms)continue;
+  let h;try{h=assessLoan(local,terms,pools,prices,now);}catch{continue;}
+  if(h.health<1.25)nextWatch.add(escrow);
+  if(!h.liquidatable)continue;
+  liquidatable++;
   if(blockedAssets(prices,[...h.collateral.map(c=>c.asset),...h.borrows.map(b=>b.asset)],now).length){blocked++;continue;}
-  // Just under the largest allowed repayment (the contract rounds its maximum down), capped at $1,000 a group.
-  const repay=[best.repay*99n/100n,1_000_000_000n].reduce((a,b)=>a<b?a:b);
-  const seizedValue=(repay*USD/1_000_000n)*(10_000n+algoTerms.liquidationBonus)/10_000n;
-  const f=liquidatorShare(seizedValue*10n**10n/algoPrice*10n**14n/dii,algoTerms.liquidationBonus,algoTerms.liquidationFee);
-  const fWithdraw=f*995n/1000n,algoIn=fWithdraw*dii/10n**14n;
-  const expectedProfitUsd=Number(algoIn)/1e6*Number(algoPrice)/1e8*0.9945-Number(flashRepayment(repay))/1e6;
-  cands.push({escrow,repay,f,fWithdraw,algoIn,expectedProfitUsd,loanAssets:[...new Set([...h.collateral.map(c=>Number(c.asset)),...h.borrows.map(b=>Number(b.asset))])].sort((a,b)=>a-b)});
+  const loanAssets=[...new Set([...h.collateral.map(c=>Number(c.asset)),...h.borrows.map(b=>Number(b.asset))])].sort((a,b)=>a-b);
+  for(const route of Object.values(ROUTES)){
+   const debt=h.borrows.find(b=>b.asset===BigInt(route.debtAsset)),col=h.collateral.find(c=>c.asset===BigInt(route.colAsset));if(!debt||!col)continue;
+   const best=bestLiquidation({...h,borrows:[debt],collateral:[col]},terms);if(!best||best.repay<=0n)continue;
+   const ct=terms.get(route.colPool),pd=prices.get(BigInt(route.debtAsset))?.price,pc=prices.get(BigInt(route.colAsset))?.price,dii=pools.get(route.colPool)?.depositIndex;
+   if(!ct||!pd||!pc||!dii)continue;
+   // Just under the largest allowed repayment (the contract rounds its maximum down), capped at $1,000 a group.
+   const cap=1000n*10n**14n/pd,repay=[best.repay*99n/100n,cap].reduce((a,b)=>a<b?a:b);
+   const seized4=(repay*pd/10n**10n)*(10_000n+ct.liquidationBonus)/10_000n;
+   const f=liquidatorShare((seized4*10n**10n/pc)*10n**14n/dii,ct.liquidationBonus,ct.liquidationFee);
+   const fWithdraw=f*995n/1000n,colOut=fWithdraw*dii/10n**14n;
+   const expectedProfitUsd=usd(colOut,pc)*0.9945-usd(flashRepayment(repay),pd);
+   cands.push({escrow,app,route,repay,fWithdraw,colOut,expectedProfitUsd,loanAssets});
+  }
  }
+ if(full)watch=nextWatch;
  cands.sort((a,b)=>b.expectedProfitUsd-a.expectedProfitUsd);
- const feeUsd=Number(FEE_ESTIMATE)/1e6*Number(algoPrice)/1e8;
+ const feeUsd=usd(FEE_ESTIMATE,algoPrice);
  const worth=cands.filter(c=>c.expectedProfitUsd-feeUsd>=MIN_PROFIT_USD);
- await writeFile(join(dir,'executor-status.json'),JSON.stringify({checkedAt:new Date().toISOString(),live,loans:loans.size,candidates:cands.length,blockedByStalePrices:blocked,worth:worth.length,
-  top:worth.slice(0,5).map(c=>({escrow:c.escrow,repayUsdc:Number(c.repay)/1e6,expectedProfitUsd:Number(c.expectedProfitUsd.toFixed(4))}))},null,1),{mode:0o600});
- const paused=await access(join(treasury,'PAUSE')).then(()=>true,()=>false);
+ const byRoute=Object.fromEntries(Object.values(ROUTES).map(r=>[r.name,cands.filter(c=>c.route===r).length]));
+ await writeFile(join(dir,live?'executor-status.json':'executor-status-dry.json'),JSON.stringify({checkedAt:new Date().toISOString(),live,loans:loans.size,watched:watch.size,fullPass:full,liquidatable,candidates:cands.length,candidatesByRoute:byRoute,blockedByStalePrices:blocked,worth:worth.length,
+  top:worth.slice(0,5).map(c=>({route:c.route.name,escrow:c.escrow,repay:Number(c.repay)/1e6,expectedProfitUsd:Number(c.expectedProfitUsd.toFixed(4))}))},null,1),{mode:0o600});
  if(!worth.length)return;
+ const paused=await access(join(treasury,'PAUSE')).then(()=>true,()=>false);
  const me=DEVELOPMENT_ADDRESS!,acct=await get(`${DEFAULT_ALGOD}/v2/accounts/${me}`);
- // The first liquidation also opts the wallet in to fALGO (0.1 ALGO more minimum): the opt-in is only paid for when it earns.
- const optIn=!(acct.assets??[]).some((x:{'asset-id':number})=>x['asset-id']===FALGO),mbr=optIn?100_000n:0n;
- const state=await walletState(me),spare=state.algo-state.minimum,price=Number(algoPrice)/1e8;
+ const heldAssets=new Set<number>((acct.assets??[]).map((x:{'asset-id':number})=>x['asset-id']));
+ const state=await walletState(me),spare=state.algo-state.minimum;
  for(const c of worth.slice(0,2)){
-  // The flash loan, liquidation, withdrawal and repayment take 10 transactions (11 with the opt-in): the swap gets the rest of 16.
-  const need=flashRepayment(c.repay),routerMax=16-(optIn?11:10);
-  let algoSwap=c.algoIn,quote=await quoteSwap(0,USDC,algoSwap,undefined,undefined,routerMax),minOut=minReceive(quote);
+  const r=c.route;
+  if(r.debtAsset&&!heldAssets.has(r.debtAsset))continue;  // the flash loan pays the debt asset to this wallet
+  // A route's first liquidation also opts the wallet in to its fAsset (and xALGO): 0.1 ALGO more minimum each, paid only when it earns.
+  const optIns=[r.colFAsset,...(r.colAsset?[r.colAsset]:[])].filter(a=>!heldAssets.has(a)),mbr=100_000n*BigInt(optIns.length);
+  // The flash loan, liquidation, withdrawal, repayment and opt-ins take 10 + opt-ins transactions: the swap gets the rest of 16.
+  const need=flashRepayment(c.repay),routerMax=16-(10+optIns.length);
+  let swapIn=c.colOut,quote=await quoteSwap(r.colAsset,r.debtAsset,swapIn,undefined,undefined,routerMax),minOut=minReceive(quote);
   if(minOut<need){failedAt.set(c.escrow,Date.now());continue;}
-  // Keep enough of the ALGO to top the fee float back up and swap the rest (re-quoted: it must still cover the repayment).
-  const keep=algoToKeep(c.algoIn,minOut,need,spare-mbr-FEE_ESTIMATE,TARGET_SPARE);
-  if(keep>0n){const q=await quoteSwap(0,USDC,c.algoIn-keep,undefined,undefined,routerMax),m=minReceive(q);if(m>=need){algoSwap=c.algoIn-keep;quote=q;minOut=m;}}
+  if(r.colAsset===0){
+   // ALGO collateral: keep enough to top the fee float back up and swap the rest (re-quoted: it must still cover the repayment).
+   const keep=algoToKeep(c.colOut,minOut,need,spare-mbr-FEE_ESTIMATE,TARGET_SPARE);
+   if(keep>0n){const q=await quoteSwap(0,r.debtAsset,c.colOut-keep,undefined,undefined,routerMax),m=minReceive(q);if(m>=need){swapIn=c.colOut-keep;quote=q;minOut=m;}}
+  }
   const p=await suggestedParams(DEFAULT_ALGOD);
-  const args={liquidator:me,escrow:c.escrow,loanApp:LOAN,loanAssets:c.loanAssets,repay:c.repay,fWithdraw:c.fWithdraw,minCollateral:c.fWithdraw,budget:BUDGET,optIn};
+  const args={liquidator:me,escrow:c.escrow,loanApp:c.app,loanAssets:c.loanAssets,repay:c.repay,fWithdraw:c.fWithdraw,minCollateral:c.fWithdraw,budget:BUDGET,route:r,optIns};
   const txns=flashLiquidationGroup(args,(await prepareSwap(me,quote)).map(decodeTxn),p);
-  const fees=txns.reduce((n,t)=>n+(typeof t.fee==='bigint'?t.fee:0n),0n),kept=c.algoIn-algoSwap;
-  const profitUsd=Number(kept-fees)/1e6*price+Number(minOut-need)/1e6;
+  const fees=txns.reduce((n,t)=>n+(typeof t.fee==='bigint'?t.fee:0n),0n),kept=r.colAsset===0?c.colOut-swapIn:0n;
+  const pd=prices.get(BigInt(r.debtAsset))!.price;
+  const profitUsd=usd(minOut-need,pd)+usd(kept,algoPrice)-usd(fees,algoPrice);
   if(profitUsd<MIN_PROFIT_USD){failedAt.set(c.escrow,Date.now());continue;}
-  const problem=flashLiquidationProblem(txns,args,algoSwap,minOut);
-  if(problem){await log('skipped.jsonl',{escrow:c.escrow,problem});failedAt.set(c.escrow,Date.now());continue;}
-  const sim=await simulate([txns.map(encodeTxn)],DEFAULT_ALGOD),g=sim['txn-groups']?.[0];
-  if(!sim.ok||g?.['failure-message']){await log('skipped.jsonl',{escrow:c.escrow,simulation:String(sim.message??g?.['failure-message']).slice(0,200)});failedAt.set(c.escrow,Date.now());continue;}
-  const summary=`${c.escrow.slice(0,8)}…: repay ${Number(c.repay)/1e6} USDC, keep ${Number(kept)/1e6} ALGO + ≥${Number(minOut-need)/1e6} USDC, ≥$${profitUsd.toFixed(4)} net${optIn?' (with the fALGO opt-in)':''}`;
-  if(paused||!live){say(`${paused?'Paused':'Dry run'}: would liquidate ${summary}`);await log('dry-run.jsonl',{escrow:c.escrow,repay:String(c.repay),kept:String(kept),profitUsd});continue;}
+  const problem=flashLiquidationProblem(txns,args,swapIn,minOut);
+  if(problem){await log('skipped.jsonl',{escrow:c.escrow,route:r.name,problem});failedAt.set(c.escrow,Date.now());continue;}
+  const summary=`${r.name}, loan ${c.escrow.slice(0,8)}…: repay ${Number(c.repay)/1e6}, ≥$${profitUsd.toFixed(4)} net${kept?` (keeps ${Number(kept)/1e6} ALGO)`:''}${optIns.length?` with ${optIns.length} opt-in${optIns.length>1?'s':''}`:''}`;
+  if(paused||!live){
+   const sim=await simulate([txns.map(encodeTxn)],DEFAULT_ALGOD),g=sim['txn-groups']?.[0];
+   const verdict=!sim.ok||g?.['failure-message']?`simulation fails: ${String(sim.message??g?.['failure-message']).slice(0,120)}`:'simulation succeeds';
+   say(`${paused?'Paused':'Dry run'}: would liquidate ${summary}; ${verdict}`);
+   await log('dry-run.jsonl',{escrow:c.escrow,route:r.name,repay:String(c.repay),kept:String(kept),profitUsd,verdict});continue;
+  }
   if(spare<mbr+fees+FEE_RESERVE){say(`Not enough spare ALGO for a liquidation: ${Number(spare)/1e6} spare, needs ${Number(mbr+fees+FEE_RESERVE)/1e6}`);return;}
+  // Live: no simulation first (it costs a second, and a failed group pays nothing); the check above bounds every transfer.
   const keys=await ownerKeys();
   try{
    const signed=txns.map(t=>signTxn(t,keys.seed)),id=txid(txns[0]);
    const round=await submit(signed,DEFAULT_ALGOD).then(()=>confirmed(id,DEFAULT_ALGOD)).catch(async error=>{
-    await log('lost.jsonl',{escrow:c.escrow,error:String((error as Error).message).slice(0,200)});failedAt.set(c.escrow,Date.now());return undefined;});
+    await log('lost.jsonl',{escrow:c.escrow,route:r.name,error:String((error as Error).message).slice(0,200)});failedAt.set(c.escrow,Date.now());return undefined;});
    if(round===undefined)continue;
-   await log('trades.jsonl',{escrow:c.escrow,txid:id,round,repay:String(c.repay),keptAlgo:String(kept),minOut:String(minOut),fees:String(fees),optIn,profitUsdAtLeast:profitUsd});
+   await log('trades.jsonl',{escrow:c.escrow,route:r.name,txid:id,round,repay:String(c.repay),keptAlgo:String(kept),minOut:String(minOut),fees:String(fees),optIns,profitUsdAtLeast:profitUsd});
    console.log(`Liquidated ${summary}, round ${round} ${id}`);
-   return; // balances and the opt-in changed: the next check starts fresh
+   return; // balances and opt-ins changed: the next block starts fresh
   }finally{keys.seed.fill(0);}
  }
 }
 
-const live=process.argv.includes('--live'),every=Number(process.argv[process.argv.indexOf('--every')+1])||5;
-console.log(`Folks liquidator ${live?'LIVE':'dry run'}: USDC debt / ALGO collateral, ≥$${MIN_PROFIT_USD} net, checked every ${every}s`);
+const live=process.argv.includes('--live'),every=Number(process.argv[process.argv.indexOf('--every')+1])||0;
+console.log(`Folks liquidator ${live?'LIVE':'dry run'}: ${Object.values(ROUTES).map(r=>r.name).join('; ')}, across ${LOAN_APPS.length} loan types, ≥$${MIN_PROFIT_USD} net, ${every?`every ${every}s`:'every block'}`);
+let round=0n;
 for(;;){
+ if(every)await new Promise(r=>setTimeout(r,every*1000));
+ else{
+  // Wake on each new block (~2.8 s), when fresh oracle prices can first be acted on.
+  try{
+   if(!round)round=BigInt((await get(`${DEFAULT_ALGOD}/v2/status`))['last-round']);
+   round=BigInt((await get(`${DEFAULT_ALGOD}/v2/status/wait-for-block-after/${round}`))['last-round']);
+  }catch{round=0n;await new Promise(r=>setTimeout(r,3000));}
+ }
  try{await tick(live);}catch(error){console.error('Liquidator deferred:',(error as Error).message);}
- await new Promise(r=>setTimeout(r,every*1000));
 }
